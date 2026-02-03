@@ -29,7 +29,7 @@ archives:
 # Release configuration
 release:
   github:
-    owner: SamSaffron
+    owner: discourse
     name: dv
   name_template: "Release {{ .Tag }}"
   draft: false
