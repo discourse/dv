@@ -28,38 +28,62 @@ func buildPostCheckoutCommands() []string {
 	}
 }
 
-// buildDatabaseResetCommands generates commands to reset and migrate databases
-func buildDatabaseResetCommands() []string {
-	return []string{
+// buildDatabaseDropCreateMigrateCommands generates commands to drop, create, and migrate databases.
+// When skipDBReset is true, db:drop and db:create are omitted, as well as user seeding.
+// Only migrations and later steps run.
+func buildDatabaseDropCreateMigrateCommands(opts discourseResetScriptOpts) []string {
+	cmds := []string{
 		"echo 'Stopping services (as root): unicorn and ember-cli'",
 		"sudo -n true 2>/dev/null || true",
 		"sudo /usr/bin/sv force-stop unicorn || sudo sv force-stop unicorn || true",
 		"sudo /usr/bin/sv force-stop ember-cli || sudo sv force-stop ember-cli || true",
 		"echo 'Waiting for PostgreSQL to be ready...'",
 		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo 'PostgreSQL did not become ready'; exit 1)",
-		"echo 'Resetting and migrating databases (development and test)...'",
 		"MIG_LOG_DEV=/tmp/dv-migrate-dev-$(date +%s).log",
 		"MIG_LOG_TEST=/tmp/dv-migrate-test-$(date +%s).log",
-		"(bin/rake db:drop || true)",
-		"bin/rake db:create",
+	}
+
+	if opts.SkipDBReset {
+		cmds = append(cmds, "echo 'Migrating databases (development and test)...'")
+	} else {
+		cmds = append(cmds,
+			"echo 'Resetting and migrating databases (development and test)...'",
+			"(bin/rake db:drop || true)",
+			"bin/rake db:create",
+		)
+	}
+
+	cmds = append(cmds,
 		"echo \"Migrating dev DB (output -> $MIG_LOG_DEV)\"",
 		"bin/rake db:migrate > \"$MIG_LOG_DEV\" 2>&1",
 		"echo \"Migrating test DB (output -> $MIG_LOG_TEST)\"",
 		"RAILS_ENV=test bin/rake db:migrate > \"$MIG_LOG_TEST\" 2>&1",
 		"bundle",
 		"pnpm install",
-		"echo 'Seeding users...'",
-		"bin/rails r /tmp/seed_users.rb || true",
+	)
+
+	// Seed users if we dropped + created, otherwise it will fail
+	// with duplicate user error.
+	if !opts.SkipDBReset {
+		cmds = append(cmds,
+			"echo 'Seeding users...'",
+			"bin/rails r /tmp/seed_users.rb || true",
+		)
+	}
+
+	cmds = append(cmds,
 		"echo 'Migration logs:'",
 		"echo \"  dev : $MIG_LOG_DEV\"",
 		"echo \"  test: $MIG_LOG_TEST\"",
 		"echo 'Done.'",
-	}
+	)
+
+	return cmds
 }
 
 // discourseResetScriptOpts configures buildDiscourseResetScript.
 type discourseResetScriptOpts struct {
-	SkipDBReset bool // if true, omit DB reset and migrations
+	SkipDBReset bool // if true, only migrate databases, do not drop or create them
 }
 
 // buildDiscourseResetScript generates a shell script that performs common
@@ -69,7 +93,7 @@ type discourseResetScriptOpts struct {
 // - Ensures full git history
 // - Executes custom checkout commands
 // - Reinstalls dependencies
-// - Optionally resets and migrates databases (when opts.SkipDBReset is false)
+// - Migrates databases, and optionally drops and recreates them when opts.SkipDBReset is false
 // - Seeds users
 // - Restarts services on exit
 //
@@ -91,10 +115,8 @@ func buildDiscourseResetScript(checkoutCmds []string, opts discourseResetScriptO
 	// Post-checkout steps
 	lines = append(lines, buildPostCheckoutCommands()...)
 
-	// Database reset (optional)
-	if !opts.SkipDBReset {
-		lines = append(lines, buildDatabaseResetCommands()...)
-	}
+	// Database reset (optional) and migrations
+	lines = append(lines, buildDatabaseDropCreateMigrateCommands(opts)...)
 
 	return strings.Join(lines, "\n")
 }
@@ -191,7 +213,7 @@ func buildDiscourseDatabaseResetScript() string {
 	}
 
 	// Database reset (reuses shared logic)
-	lines = append(lines, buildDatabaseResetCommands()...)
+	lines = append(lines, buildDatabaseDropCreateMigrateCommands(discourseResetScriptOpts{})...)
 
 	return strings.Join(lines, "\n")
 }
