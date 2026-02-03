@@ -324,7 +324,7 @@ Notes:
 - Performs a full database reset and migration (development and test databases).
 - Reinstalls dependencies (bundle and pnpm).
 - Seeds test users.
-- Use `--no-reset` to skip DB reset and migrations (only checkout and reinstall deps).
+- Use `--no-reset` to skip DB drop, create, and seed, but still run migrations reinstall deps.
 - Supports TAB completion with PR numbers and titles from GitHub API.
 - Only works with containers using the `discourse` image kind.
 
@@ -352,7 +352,7 @@ Notes:
 - Performs a full database reset and migration (development and test databases).
 - Reinstalls dependencies (bundle and pnpm).
 - Seeds test users.
-- Use `--no-reset` to skip DB reset and migrations (only checkout and reinstall deps).
+- Use `--no-reset` to skip DB drop, create, and seed, but still run migrations reinstall deps.
 - Use `--new` to create a new branch from origin/main (or origin/master) if the branch does not exist on remote.
 - Supports TAB completion(e.g., `dv branch me<TAB>` queries only branches starting with "me").
 - Only works with containers using the `discourse` image kind.
