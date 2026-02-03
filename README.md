@@ -25,7 +25,7 @@ This project provides a containerized development environment that includes:
 Install the latest release for macOS or Linux with a single command:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/SamSaffron/dv/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/discourse/dv/main/install.sh | sh
 ```
 
 The script downloads the correct binary for your platform and installs it to `~/.local/bin` (create it if missing). After it finishes, run `dv version` to confirm that the binary is on your `PATH`.
@@ -34,10 +34,10 @@ To pin a specific release or control the install location:
 
 ```bash
 # install a specific tag
-curl -sSfL https://raw.githubusercontent.com/SamSaffron/dv/main/install.sh | sh -s -- --version v0.3.0
+curl -sSfL https://raw.githubusercontent.com/discourse/dv/main/install.sh | sh -s -- --version v0.3.0
 
 # install without sudo
-curl -sSfL https://raw.githubusercontent.com/SamSaffron/dv/main/install.sh | sh -s -- --install-dir ~/.local/bin
+curl -sSfL https://raw.githubusercontent.com/discourse/dv/main/install.sh | sh -s -- --install-dir ~/.local/bin
 ```
 
 You can also set the `DV_INSTALL_DIR` environment variable to change the default target directory. If `~/.local/bin` (or your custom path) isn’t on your `PATH`, add it in your shell profile, e.g. `export PATH="$HOME/.local/bin:$PATH"`.

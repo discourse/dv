@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGISTRY_REPO: samsaffron/discourse-dv
+  REGISTRY_REPO: discourse/dv
 
 jobs:
   build:
