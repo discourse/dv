@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO_OWNER="SamSaffron"
+REPO_OWNER="discourse"
 REPO_NAME="dv"
 BINARY_NAME="dv"
 DEFAULT_INSTALL_DIR=${DV_INSTALL_DIR:-$HOME/.local/bin}

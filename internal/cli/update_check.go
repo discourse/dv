@@ -25,7 +25,7 @@ const (
 	updateCheckInterval   = 24 * time.Hour
 	updateUserAgent       = "dv-cli"
 	skipUpdateEnvVar      = "DV_SKIP_UPDATE_CHECK"
-	updateRepoOwner       = "SamSaffron"
+	updateRepoOwner       = "discourse"
 	updateRepoName        = "dv"
 	updateCheckCommandArg = "__update-check"
 )
