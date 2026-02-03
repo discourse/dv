@@ -316,14 +316,15 @@ dv extract --sync --debug
 Checkout a GitHub pull request in the container and reset the development environment.
 
 ```bash
-dv pr [--name NAME] NUMBER
+dv pr [--name NAME] [--no-reset] NUMBER
 ```
 
 Notes:
-- Fetches and checks out the specified PR into a local branch `pr-<NUMBER>`.
+- Fetches and checks out the specified PR into a local branch.
 - Performs a full database reset and migration (development and test databases).
 - Reinstalls dependencies (bundle and pnpm).
 - Seeds test users.
+- Use `--no-reset` to skip DB drop, create, and seed, but still run migrations reinstall deps.
 - Supports TAB completion with PR numbers and titles from GitHub API.
 - Only works with containers using the `discourse` image kind.
 
@@ -331,6 +332,9 @@ Examples:
 ```bash
 # Checkout PR #12345
 dv pr 12345
+
+# Checkout without resetting DB
+dv pr --no-reset 12345
 
 # Use TAB completion to search and select a PR
 dv pr <TAB>
@@ -340,7 +344,7 @@ dv pr <TAB>
 Checkout a git branch in the container and reset the development environment.
 
 ```bash
-dv branch [--name NAME] BRANCH
+dv branch [--name NAME] [--no-reset] [--new] BRANCH
 ```
 
 Notes:
@@ -348,6 +352,8 @@ Notes:
 - Performs a full database reset and migration (development and test databases).
 - Reinstalls dependencies (bundle and pnpm).
 - Seeds test users.
+- Use `--no-reset` to skip DB drop, create, and seed, but still run migrations reinstall deps.
+- Use `--new` to create a new branch from origin/main (or origin/master) if the branch does not exist on remote.
 - Supports TAB completion(e.g., `dv branch me<TAB>` queries only branches starting with "me").
 - Only works with containers using the `discourse` image kind.
 
@@ -361,6 +367,12 @@ dv branch <TAB>
 
 # Checkout a feature branch
 dv branch feature/my-feature
+
+# Create a new local branch for development
+dv branch --new my-new-feature
+
+# Quickly switch branches without resetting DB
+dv branch --no-reset main
 ```
 
 ### dv extract plugin

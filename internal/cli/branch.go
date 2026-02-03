@@ -17,10 +17,11 @@ var shellExecCommand = exec.Command
 
 // branchCmd implements: dv branch [--name NAME] BRANCH
 // - Checks out the given branch in the container's repo workdir
-// - Resets DB and runs migrations and seed (mirrors Dockerfile init)
+// - Resets DB and runs migrations and seed (mirrors Dockerfile init) unless --no-reset is specified
+// - Creates a new branch if --new is specified and the branch does not exist on remote
 var branchCmd = &cobra.Command{
-	Use:   "branch [--name NAME] BRANCH",
-	Short: "Checkout a branch in the container and reset DB",
+	Use:   "branch [--name NAME] [--no-reset] [--new] BRANCH",
+	Short: "Checkout a branch in the container (resets DB by default)",
 	Args:  cobra.ExactArgs(1),
 	// Dynamic completion: list branches from discourse/discourse GitHub repo
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -39,7 +40,6 @@ var branchCmd = &cobra.Command{
 		return branches, cobra.ShellCompDirectiveNoFileComp
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Parse branch name
 		branchName := strings.TrimSpace(args[0])
 		if branchName == "" {
 			return fmt.Errorf("invalid branch name: %q", args[0])
@@ -89,11 +89,31 @@ var branchCmd = &cobra.Command{
 			return fmt.Errorf("'dv branch' is only supported for discourse image kind; current: %q", imgCfg.Kind)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch '%s' in container '%s'...\n", branchName, name)
+		noReset, _ := cmd.Flags().GetBool("no-reset")
+		useNew, _ := cmd.Flags().GetBool("new")
+
+		// If --new is specified and the branch does not exist on remote, create it from origin/main (or origin/master),
+		// otherwise checkout the branch, which will fail if the branch does not exist on remote.
+		var checkoutCmds []string
+		if useNew {
+			exists, err := remoteBranchExists("https://github.com/discourse/discourse.git", branchName)
+			if err != nil {
+				return fmt.Errorf("checking remote branch: %w", err)
+			}
+			if !exists {
+				checkoutCmds = buildNewBranchCheckoutCommands(branchName)
+				fmt.Fprintf(cmd.OutOrStdout(), "Branch '%s' not on remote; creating new branch in container '%s'...\n", branchName, name)
+			} else {
+				checkoutCmds = buildBranchCheckoutCommands(branchName)
+				fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch '%s' in container '%s'...\n", branchName, name)
+			}
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch '%s' in container '%s'...\n", branchName, name)
+			checkoutCmds = buildBranchCheckoutCommands(branchName)
+		}
 
 		// Build shell script to checkout branch safely
-		checkoutCmds := buildBranchCheckoutCommands(branchName)
-		script := buildDiscourseResetScript(checkoutCmds)
+		script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{SkipDBReset: noReset})
 
 		// Run interactively to stream output to the user
 		argv := []string{"bash", "-lc", script}
@@ -106,6 +126,8 @@ var branchCmd = &cobra.Command{
 
 func init() {
 	branchCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
+	branchCmd.Flags().Bool("new", false, "If the branch does not exist on remote, create it from origin/main (or origin/master)")
+	branchCmd.Flags().Bool("no-reset", false, "Do not reset DB or run migrations; only checkout and reinstall deps")
 	rootCmd.AddCommand(branchCmd)
 }
 
@@ -151,4 +173,17 @@ func listBranchesWithGitLsRemote(repoURL, pattern string) ([]string, error) {
 	result = append(result, otherBranches...)
 
 	return result, nil
+}
+
+// remoteBranchExists checks if a specific branch exists on the remote.
+// This is more efficient than listing all branches when checking a single name.
+func remoteBranchExists(repoURL, branchName string) (bool, error) {
+	refPattern := fmt.Sprintf("refs/heads/%s", branchName)
+	cmd := shellExecCommand("git", "ls-remote", "--heads", repoURL, refPattern)
+	out, err := cmd.Output()
+	if err != nil {
+		// git ls-remote returns exit code 0 even if no match, so error means network/auth issue
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
 }
