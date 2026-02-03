@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,11 +18,12 @@ var shellExecCommand = exec.Command
 
 // branchCmd implements: dv branch [--name NAME] BRANCH
 // - Checks out the given branch in the container's repo workdir
-// - Resets DB and runs migrations and seed (mirrors Dockerfile init)
+// - Resets DB and runs migrations and seed (mirrors Dockerfile init) unless --no-reset is specified
+// - Creates a new branch if --new is specified and the branch does not exist on remote
 var branchCmd = &cobra.Command{
-	Use:   "branch [--name NAME] BRANCH",
+	Use:   "branch [--name NAME] [--no-reset] [--new] BRANCH",
 	Short: "Checkout a branch in the container and reset DB",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.RangeArgs(0, 1),
 	// Dynamic completion: list branches from discourse/discourse GitHub repo
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		// Only complete the first positional arg (branch name)
@@ -89,11 +91,32 @@ var branchCmd = &cobra.Command{
 			return fmt.Errorf("'dv branch' is only supported for discourse image kind; current: %q", imgCfg.Kind)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch '%s' in container '%s'...\n", branchName, name)
+		noReset, _ := cmd.Flags().GetBool("no-reset")
+		useNew, _ := cmd.Flags().GetBool("new")
+
+		// If --new is specified and the branch does not exist on remote, create it from origin/main (or origin/master),
+		// otherwise checkout the branch, which will fail if the branch does not exist on remote.
+		var checkoutCmds []string
+		if useNew {
+			branches, err := listBranchesWithGitLsRemote("https://github.com/discourse/discourse.git", "")
+			if err != nil {
+				return fmt.Errorf("listing remote branches: %w", err)
+			}
+			exists := slices.Contains(branches, branchName)
+			if !exists {
+				checkoutCmds = buildNewBranchCheckoutCommands(branchName)
+				fmt.Fprintf(cmd.OutOrStdout(), "Branch '%s' not on remote; creating new branch in container '%s'...\n", branchName, name)
+			} else {
+				checkoutCmds = buildBranchCheckoutCommands(branchName)
+				fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch '%s' in container '%s'...\n", branchName, name)
+			}
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch '%s' in container '%s'...\n", branchName, name)
+			checkoutCmds = buildBranchCheckoutCommands(branchName)
+		}
 
 		// Build shell script to checkout branch safely
-		checkoutCmds := buildBranchCheckoutCommands(branchName)
-		script := buildDiscourseResetScript(checkoutCmds)
+		script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{SkipDBReset: noReset})
 
 		// Run interactively to stream output to the user
 		argv := []string{"bash", "-lc", script}
@@ -106,6 +129,8 @@ var branchCmd = &cobra.Command{
 
 func init() {
 	branchCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
+	branchCmd.Flags().Bool("new", false, "If the branch does not exist on remote, create it from origin/main (or origin/master)")
+	branchCmd.Flags().Bool("no-reset", false, "Do not reset DB or run migrations; only checkout and reinstall deps")
 	rootCmd.AddCommand(branchCmd)
 }
 

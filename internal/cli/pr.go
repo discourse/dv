@@ -125,7 +125,7 @@ var prCmd = &cobra.Command{
 
 		// Build shell script to fetch and checkout PR branch using the actual branch name
 		checkoutCmds := buildPRCheckoutCommands(prNumber, branchName)
-		script := buildDiscourseResetScript(checkoutCmds)
+		script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{})
 
 		// Run interactively to stream output to the user
 		argv := []string{"bash", "-lc", script}

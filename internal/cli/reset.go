@@ -133,7 +133,7 @@ func resetGitRunE(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Resetting git and migrating in container '%s'...\n", name)
 
-	script := buildDiscourseResetScript(buildCurrentBranchResetCommands())
+	script := buildDiscourseResetScript(buildCurrentBranchResetCommands(), discourseResetScriptOpts{})
 	argv := []string{"bash", "-lc", script}
 	if err := docker.ExecInteractive(name, workdir, nil, argv); err != nil {
 		return fmt.Errorf("container: failed to reset git: %w", err)

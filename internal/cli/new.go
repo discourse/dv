@@ -211,7 +211,7 @@ func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prN
 	}
 	branchName := prDetail.Head.Ref
 	checkoutCmds := buildPRCheckoutCommands(prNumber, branchName)
-	script := buildDiscourseResetScript(checkoutCmds)
+	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{})
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 
@@ -228,7 +228,7 @@ git pull > /tmp/dv-git-pull.log 2>&1
 		return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 	}
 	checkoutCmds := buildBranchCheckoutCommands(branchName)
-	script := buildDiscourseResetScript(checkoutCmds)
+	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{})
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 

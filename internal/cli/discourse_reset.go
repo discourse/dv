@@ -57,6 +57,11 @@ func buildDatabaseResetCommands() []string {
 	}
 }
 
+// discourseResetScriptOpts configures buildDiscourseResetScript.
+type discourseResetScriptOpts struct {
+	SkipDBReset bool // if true, omit DB reset and migrations
+}
+
 // buildDiscourseResetScript generates a shell script that performs common
 // Discourse development environment reset tasks:
 // - Stops services (unicorn, ember-cli)
@@ -64,13 +69,13 @@ func buildDatabaseResetCommands() []string {
 // - Ensures full git history
 // - Executes custom checkout commands
 // - Reinstalls dependencies
-// - Resets and migrates databases
+// - Optionally resets and migrates databases (when opts.SkipDBReset is false)
 // - Seeds users
 // - Restarts services on exit
 //
 // checkoutCmds should contain the git checkout logic specific to the caller
 // (e.g., PR checkout, branch checkout).
-func buildDiscourseResetScript(checkoutCmds []string) string {
+func buildDiscourseResetScript(checkoutCmds []string, opts discourseResetScriptOpts) string {
 	lines := []string{
 		"set -euo pipefail",
 		"cleanup() { echo 'Starting services (as root): unicorn and ember-cli'; sudo /usr/bin/sv start unicorn || sudo sv start unicorn || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
@@ -86,8 +91,10 @@ func buildDiscourseResetScript(checkoutCmds []string) string {
 	// Post-checkout steps
 	lines = append(lines, buildPostCheckoutCommands()...)
 
-	// Database reset
-	lines = append(lines, buildDatabaseResetCommands()...)
+	// Database reset (optional)
+	if !opts.SkipDBReset {
+		lines = append(lines, buildDatabaseResetCommands()...)
+	}
 
 	return strings.Join(lines, "\n")
 }
@@ -118,6 +125,17 @@ func buildBranchCheckoutCommands(branchName string) []string {
 		fmt.Sprintf("echo 'Checking out branch %s...'", branchName),
 		fmt.Sprintf("git checkout %s", branchName),
 		"git pull --ff-only || true",
+	}
+}
+
+// buildNewBranchCheckoutCommands generates git commands to create and checkout
+// a new branch from the default remote branch (origin/main or origin/master).
+func buildNewBranchCheckoutCommands(branchName string) []string {
+	return []string{
+		fmt.Sprintf("echo 'Creating new branch %s from origin...'", branchName),
+		"git fetch origin --tags --prune",
+		"if git show-ref -q refs/remotes/origin/main; then default_ref=origin/main; else default_ref=origin/master; fi",
+		fmt.Sprintf("git checkout -b %s \"$default_ref\"", shellQuote(branchName)),
 	}
 }
 
