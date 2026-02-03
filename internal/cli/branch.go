@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os/exec"
-	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -22,8 +21,8 @@ var shellExecCommand = exec.Command
 // - Creates a new branch if --new is specified and the branch does not exist on remote
 var branchCmd = &cobra.Command{
 	Use:   "branch [--name NAME] [--no-reset] [--new] BRANCH",
-	Short: "Checkout a branch in the container and reset DB",
-	Args:  cobra.RangeArgs(0, 1),
+	Short: "Checkout a branch in the container (resets DB by default)",
+	Args:  cobra.ExactArgs(1),
 	// Dynamic completion: list branches from discourse/discourse GitHub repo
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		// Only complete the first positional arg (branch name)
@@ -41,7 +40,6 @@ var branchCmd = &cobra.Command{
 		return branches, cobra.ShellCompDirectiveNoFileComp
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Parse branch name
 		branchName := strings.TrimSpace(args[0])
 		if branchName == "" {
 			return fmt.Errorf("invalid branch name: %q", args[0])
@@ -98,11 +96,10 @@ var branchCmd = &cobra.Command{
 		// otherwise checkout the branch, which will fail if the branch does not exist on remote.
 		var checkoutCmds []string
 		if useNew {
-			branches, err := listBranchesWithGitLsRemote("https://github.com/discourse/discourse.git", "")
+			exists, err := remoteBranchExists("https://github.com/discourse/discourse.git", branchName)
 			if err != nil {
-				return fmt.Errorf("listing remote branches: %w", err)
+				return fmt.Errorf("checking remote branch: %w", err)
 			}
-			exists := slices.Contains(branches, branchName)
 			if !exists {
 				checkoutCmds = buildNewBranchCheckoutCommands(branchName)
 				fmt.Fprintf(cmd.OutOrStdout(), "Branch '%s' not on remote; creating new branch in container '%s'...\n", branchName, name)
@@ -176,4 +173,17 @@ func listBranchesWithGitLsRemote(repoURL, pattern string) ([]string, error) {
 	result = append(result, otherBranches...)
 
 	return result, nil
+}
+
+// remoteBranchExists checks if a specific branch exists on the remote.
+// This is more efficient than listing all branches when checking a single name.
+func remoteBranchExists(repoURL, branchName string) (bool, error) {
+	refPattern := fmt.Sprintf("refs/heads/%s", branchName)
+	cmd := shellExecCommand("git", "ls-remote", "--heads", repoURL, refPattern)
+	out, err := cmd.Output()
+	if err != nil {
+		// git ls-remote returns exit code 0 even if no match, so error means network/auth issue
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
 }

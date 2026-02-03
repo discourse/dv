@@ -11,12 +11,12 @@ import (
 	"dv/internal/xdg"
 )
 
-// prCmd implements: dv pr [--name NAME] NUMBER
+// prCmd implements: dv pr [--name NAME] [--no-reset] NUMBER
 // - Checks out the given GitHub PR in the container's repo workdir
-// - Resets DB and runs migrations and seed (mirrors Dockerfile init)
+// - Resets DB and runs migrations and seed (mirrors Dockerfile init) unless --no-reset is specified
 var prCmd = &cobra.Command{
-	Use:   "pr [--name NAME] NUMBER",
-	Short: "Checkout a PR in the container and reset DB",
+	Use:   "pr [--name NAME] [--no-reset] NUMBER",
+	Short: "Checkout a PR in the container (resets DB by default)",
 	Args:  cobra.ExactArgs(1),
 	// Dynamic completion: list recent PRs with titles and filter by text
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -121,11 +121,13 @@ var prCmd = &cobra.Command{
 			return fmt.Errorf("PR #%d has no branch name (head.ref is empty)", prNumber)
 		}
 
+		noReset, _ := cmd.Flags().GetBool("no-reset")
+
 		fmt.Fprintf(cmd.OutOrStdout(), "Checking out PR #%d (%s) in container '%s'...\n", prNumber, branchName, name)
 
 		// Build shell script to fetch and checkout PR branch using the actual branch name
 		checkoutCmds := buildPRCheckoutCommands(prNumber, branchName)
-		script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{})
+		script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{SkipDBReset: noReset})
 
 		// Run interactively to stream output to the user
 		argv := []string{"bash", "-lc", script}
@@ -138,5 +140,6 @@ var prCmd = &cobra.Command{
 
 func init() {
 	prCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
+	prCmd.Flags().Bool("no-reset", false, "Do not reset DB or run migrations; only checkout and reinstall deps")
 	rootCmd.AddCommand(prCmd)
 }

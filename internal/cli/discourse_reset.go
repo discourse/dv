@@ -122,20 +122,42 @@ func buildPRCheckoutCommands(prNumber int, branchName string) []string {
 // buildBranchCheckoutCommands generates git commands to checkout a branch.
 func buildBranchCheckoutCommands(branchName string) []string {
 	return []string{
-		fmt.Sprintf("echo 'Checking out branch %s...'", branchName),
-		fmt.Sprintf("git checkout %s", branchName),
+		fmt.Sprintf("_branch=%s", shellQuote(branchName)),
+		"printf 'Checking out branch %s...\\n' \"$_branch\"",
+		"git checkout \"$_branch\"",
 		"git pull --ff-only || true",
 	}
 }
 
 // buildNewBranchCheckoutCommands generates git commands to create and checkout
 // a new branch from the default remote branch (origin/main or origin/master).
+// If the branch already exists locally, it just switches to it and warns if out of sync.
 func buildNewBranchCheckoutCommands(branchName string) []string {
+	quotedBranch := shellQuote(branchName)
 	return []string{
-		fmt.Sprintf("echo 'Creating new branch %s from origin...'", branchName),
 		"git fetch origin --tags --prune",
-		"if git show-ref -q refs/remotes/origin/main; then default_ref=origin/main; else default_ref=origin/master; fi",
-		fmt.Sprintf("git checkout -b %s \"$default_ref\"", shellQuote(branchName)),
+		fmt.Sprintf("_branch=%s", quotedBranch),
+		"if git show-ref -q \"refs/heads/$_branch\"; then",
+		"  printf 'Branch %s already exists locally, switching to it...\\n' \"$_branch\"",
+		"  git checkout \"$_branch\"",
+		// Check if local branch is out of sync with any remote tracking branch
+		"  upstream=$(git rev-parse --abbrev-ref \"$_branch@{upstream}\" 2>/dev/null) || true",
+		"  if [ -n \"$upstream\" ]; then",
+		"    local_sha=$(git rev-parse HEAD)",
+		"    remote_sha=$(git rev-parse \"$upstream\" 2>/dev/null) || true",
+		"    if [ -n \"$remote_sha\" ] && [ \"$local_sha\" != \"$remote_sha\" ]; then",
+		"      printf '\\033[33mWarning: Local branch %s is out of sync with %s\\033[0m\\n' \"$_branch\" \"$upstream\"",
+		"      ahead=$(git rev-list --count \"$upstream\"..HEAD 2>/dev/null) || ahead=0",
+		"      behind=$(git rev-list --count HEAD..\"$upstream\" 2>/dev/null) || behind=0",
+		"      [ \"$ahead\" -gt 0 ] && echo \"  $ahead commit(s) ahead\"",
+		"      [ \"$behind\" -gt 0 ] && echo \"  $behind commit(s) behind\"",
+		"    fi",
+		"  fi",
+		"else",
+		"  printf 'Creating new branch %s from origin...\\n' \"$_branch\"",
+		"  if git show-ref -q refs/remotes/origin/main; then default_ref=origin/main; else default_ref=origin/master; fi",
+		"  git checkout -b \"$_branch\" \"$default_ref\"",
+		"fi",
 	}
 }
 
