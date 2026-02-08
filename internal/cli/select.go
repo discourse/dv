@@ -35,8 +35,7 @@ var selectCmd = &cobra.Command{
 
 		// Save to session-local state (current terminal)
 		if err := session.SetCurrentAgent(name); err != nil {
-			// Non-fatal: fall back to global-only behavior
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not save session state: %v\n", err)
+			return fmt.Errorf("could not save session state: %w", err)
 		}
 
 		// Save to global config (new terminals)

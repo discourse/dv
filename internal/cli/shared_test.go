@@ -1,9 +1,64 @@
 package cli
 
 import (
+	"errors"
 	"net"
+	"os"
+	"sync"
 	"testing"
+
+	"dv/internal/config"
 )
+
+type selectionSeamOverrides struct {
+	getSession func() string
+	clear      func() error
+	exists     func(string) bool
+	labels     func(string) (map[string]string, error)
+	warn       func()
+	resetOnce  bool
+}
+
+func applySelectionSeams(t *testing.T, overrides selectionSeamOverrides) {
+	t.Helper()
+
+	selectionSeamsMu.Lock()
+	prevGet := getSessionCurrentAgent
+	prevClear := clearSessionCurrentAgent
+	prevExists := dockerExistsForSelection
+	prevLabels := dockerLabelsForSelection
+	prevWarn := warnStaleSessionSelection
+	if overrides.getSession != nil {
+		getSessionCurrentAgent = overrides.getSession
+	}
+	if overrides.clear != nil {
+		clearSessionCurrentAgent = overrides.clear
+	}
+	if overrides.exists != nil {
+		dockerExistsForSelection = overrides.exists
+	}
+	if overrides.labels != nil {
+		dockerLabelsForSelection = overrides.labels
+	}
+	if overrides.warn != nil {
+		warnStaleSessionSelection = overrides.warn
+	}
+	if overrides.resetOnce {
+		staleSessionWarnOnce = sync.Once{}
+	}
+	selectionSeamsMu.Unlock()
+
+	t.Cleanup(func() {
+		selectionSeamsMu.Lock()
+		getSessionCurrentAgent = prevGet
+		clearSessionCurrentAgent = prevClear
+		dockerExistsForSelection = prevExists
+		dockerLabelsForSelection = prevLabels
+		warnStaleSessionSelection = prevWarn
+		staleSessionWarnOnce = sync.Once{}
+		selectionSeamsMu.Unlock()
+	})
+}
 
 func TestShellQuote(t *testing.T) {
 	t.Parallel()
@@ -391,5 +446,168 @@ func TestIsPortInUse_AvailablePort(t *testing.T) {
 	if got {
 		t.Logf("isPortInUse(%d) = true for recently released port (possible race)", port)
 		// Don't fail - this can happen due to TIME_WAIT or port reuse
+	}
+}
+
+func TestCurrentAgentName_PrefersDVAgent(t *testing.T) {
+	t.Setenv("DV_AGENT", "env-agent")
+
+	cfg := config.Config{
+		SelectedAgent:    "global-agent",
+		DefaultContainer: "default-agent",
+	}
+
+	applySelectionSeams(t, selectionSeamOverrides{
+		getSession: func() string { return "session-agent" },
+	})
+
+	if got := currentAgentName(cfg); got != "env-agent" {
+		t.Fatalf("currentAgentName() = %q, want %q", got, "env-agent")
+	}
+}
+
+func TestCurrentAgentName_UsesValidSessionAgent(t *testing.T) {
+	prev, had := os.LookupEnv("DV_AGENT")
+	_ = os.Unsetenv("DV_AGENT")
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("DV_AGENT", prev)
+		} else {
+			_ = os.Unsetenv("DV_AGENT")
+		}
+	})
+
+	cfg := config.Config{
+		SelectedAgent:    "global-agent",
+		DefaultContainer: "default-agent",
+		SelectedImage:    "img-a",
+		ContainerImages:  map[string]string{"session-agent": "img-a"},
+	}
+
+	clearCalled := false
+	applySelectionSeams(t, selectionSeamOverrides{
+		getSession: func() string { return "session-agent" },
+		exists:     func(name string) bool { return true },
+		clear: func() error {
+			clearCalled = true
+			return nil
+		},
+	})
+
+	if got := currentAgentName(cfg); got != "session-agent" {
+		t.Fatalf("currentAgentName() = %q, want %q", got, "session-agent")
+	}
+	if clearCalled {
+		t.Fatalf("clearSessionCurrentAgent() called unexpectedly")
+	}
+}
+
+func TestCurrentAgentName_AutoHealsMissingSessionAgent(t *testing.T) {
+	prev, had := os.LookupEnv("DV_AGENT")
+	_ = os.Unsetenv("DV_AGENT")
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("DV_AGENT", prev)
+		} else {
+			_ = os.Unsetenv("DV_AGENT")
+		}
+	})
+
+	cfg := config.Config{
+		SelectedAgent:    "global-agent",
+		DefaultContainer: "default-agent",
+	}
+
+	clearCalled := false
+	applySelectionSeams(t, selectionSeamOverrides{
+		getSession: func() string { return "stale-session-agent" },
+		exists:     func(name string) bool { return false },
+		clear: func() error {
+			clearCalled = true
+			return nil
+		},
+		warn:      func() {},
+		resetOnce: true,
+	})
+
+	if got := currentAgentName(cfg); got != "global-agent" {
+		t.Fatalf("currentAgentName() = %q, want %q", got, "global-agent")
+	}
+	if !clearCalled {
+		t.Fatalf("clearSessionCurrentAgent() was not called")
+	}
+}
+
+func TestCurrentAgentName_AutoHealsCrossImageSessionAgent(t *testing.T) {
+	prev, had := os.LookupEnv("DV_AGENT")
+	_ = os.Unsetenv("DV_AGENT")
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("DV_AGENT", prev)
+		} else {
+			_ = os.Unsetenv("DV_AGENT")
+		}
+	})
+
+	cfg := config.Config{
+		SelectedAgent:    "global-agent",
+		DefaultContainer: "default-agent",
+		SelectedImage:    "img-b",
+		ContainerImages:  map[string]string{"session-agent": "img-a"},
+	}
+
+	clearCalled := false
+	applySelectionSeams(t, selectionSeamOverrides{
+		getSession: func() string { return "session-agent" },
+		exists:     func(name string) bool { return true },
+		clear: func() error {
+			clearCalled = true
+			return nil
+		},
+		warn:      func() {},
+		resetOnce: true,
+	})
+
+	if got := currentAgentName(cfg); got != "global-agent" {
+		t.Fatalf("currentAgentName() = %q, want %q", got, "global-agent")
+	}
+	if !clearCalled {
+		t.Fatalf("clearSessionCurrentAgent() was not called")
+	}
+}
+
+func TestSessionAgentIsStale_UsesLabelsFallback(t *testing.T) {
+	cfg := config.Config{
+		SelectedImage: "img-b",
+		SelectedAgent: "session-agent",
+	}
+
+	applySelectionSeams(t, selectionSeamOverrides{
+		labels: func(name string) (map[string]string, error) {
+			return map[string]string{"com.dv.image-name": "img-a"}, nil
+		},
+		exists: func(name string) bool { return true },
+	})
+
+	if !sessionAgentIsStale(cfg, "session-agent") {
+		t.Fatalf("sessionAgentIsStale() = false, want true")
+	}
+}
+
+func TestSessionAgentIsStale_IgnoresLabelErrors(t *testing.T) {
+	cfg := config.Config{
+		SelectedImage: "img-b",
+		SelectedAgent: "session-agent",
+	}
+
+	applySelectionSeams(t, selectionSeamOverrides{
+		labels: func(name string) (map[string]string, error) {
+			return nil, errors.New("labels unavailable")
+		},
+		exists: func(name string) bool { return true },
+	})
+
+	if sessionAgentIsStale(cfg, "session-agent") {
+		t.Fatalf("sessionAgentIsStale() = true, want false when labels fail")
 	}
 }

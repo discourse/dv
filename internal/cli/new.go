@@ -95,7 +95,16 @@ var newCmd = &cobra.Command{
 		keepOnFailure, _ := cmd.Flags().GetBool("keep-on-failure")
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		containerCreated := false
+		previousSessionAgent := session.GetCurrentAgent()
+		sessionSelectionSet := false
 		defer func() {
+			if err != nil && sessionSelectionSet {
+				if previousSessionAgent != "" {
+					_ = session.SetCurrentAgent(previousSessionAgent)
+				} else {
+					_ = session.ClearCurrentAgent()
+				}
+			}
 			if err != nil && containerCreated && !keepOnFailure {
 				fmt.Fprintf(cmd.ErrOrStderr(), "\nProvisioning failed: %v\n", err)
 				fmt.Fprintf(cmd.ErrOrStderr(), "Cleaning up container '%s' (use --keep-on-failure to bypass)...\n", name)
@@ -104,10 +113,11 @@ var newCmd = &cobra.Command{
 			}
 		}()
 
-		cfg.SelectedAgent = name
 		if err := session.SetCurrentAgent(name); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not save session state: %v\n", err)
+			return fmt.Errorf("could not save session state: %w", err)
 		}
+		sessionSelectionSet = true
+		cfg.SelectedAgent = name
 
 		if verbose || isTruthyEnv("DV_VERBOSE") {
 			fmt.Fprintf(cmd.OutOrStdout(), "Resolving image for agent '%s' (image override: '%s')...\n", name, imageOverride)

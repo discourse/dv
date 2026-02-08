@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,6 +16,20 @@ import (
 	"dv/internal/docker"
 	"dv/internal/session"
 	"dv/internal/xdg"
+)
+
+var (
+	// Test seams – swapped in tests (non-parallel only unless synchronized).
+	selectionSeamsMu sync.RWMutex
+
+	getSessionCurrentAgent    = session.GetCurrentAgent
+	clearSessionCurrentAgent  = session.ClearCurrentAgent
+	dockerExistsForSelection  = docker.Exists
+	dockerLabelsForSelection  = docker.Labels
+	warnStaleSessionSelection = func() {
+		fmt.Fprintln(os.Stderr, "Warning: stale session selection ignored; falling back to selected agent.")
+	}
+	staleSessionWarnOnce sync.Once
 )
 
 // isTruthyEnv returns true for truthy environment variable values.
@@ -35,8 +50,20 @@ func currentAgentName(cfg config.Config) string {
 	}
 
 	// 2. Session-local selection (from $XDG_RUNTIME_DIR)
-	if sessionAgent := session.GetCurrentAgent(); sessionAgent != "" {
-		return sessionAgent
+	selectionSeamsMu.RLock()
+	getSession := getSessionCurrentAgent
+	clearSession := clearSessionCurrentAgent
+	warnStale := warnStaleSessionSelection
+	selectionSeamsMu.RUnlock()
+	if sessionAgent := getSession(); sessionAgent != "" {
+		if sessionAgentIsStale(cfg, sessionAgent) {
+			_ = clearSession()
+			staleSessionWarnOnce.Do(func() {
+				warnStale()
+			})
+		} else {
+			return sessionAgent
+		}
 	}
 
 	// 3. Global config
@@ -45,6 +72,44 @@ func currentAgentName(cfg config.Config) string {
 		name = cfg.DefaultContainer
 	}
 	return name
+}
+
+func sessionAgentIsStale(cfg config.Config, sessionAgent string) bool {
+	sessionAgent = strings.TrimSpace(sessionAgent)
+	if sessionAgent == "" {
+		return false
+	}
+
+	global := strings.TrimSpace(cfg.SelectedAgent)
+	selectionSeamsMu.RLock()
+	existsFn := dockerExistsForSelection
+	labelsFn := dockerLabelsForSelection
+	selectionSeamsMu.RUnlock()
+
+	// Keep "future selection" behavior: if session matches global, don't mark stale
+	// solely because the container does not exist yet.
+	if sessionAgent != global && !existsFn(sessionAgent) {
+		return true
+	}
+
+	selectedImage := strings.TrimSpace(cfg.SelectedImage)
+	if selectedImage == "" {
+		return false
+	}
+
+	if mappedImage := strings.TrimSpace(cfg.ContainerImages[sessionAgent]); mappedImage != "" {
+		return mappedImage != selectedImage
+	}
+
+	labels, err := labelsFn(sessionAgent)
+	if err != nil {
+		return false
+	}
+	if labelImage := strings.TrimSpace(labels["com.dv.image-name"]); labelImage != "" {
+		return labelImage != selectedImage
+	}
+
+	return false
 }
 
 func getenv(keys ...string) []string {
