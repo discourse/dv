@@ -148,5 +148,4 @@ func init() {
 
 	resetCmd.AddCommand(resetDbCmd)
 	resetCmd.AddCommand(resetGitCmd)
-	rootCmd.AddCommand(resetCmd)
 }
