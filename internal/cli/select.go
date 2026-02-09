@@ -33,12 +33,12 @@ var selectCmd = &cobra.Command{
 
 		name := args[0]
 
-		// Save to session-local state (current terminal)
+		// Priority 1: session-local state (pid-based, ancestor-process matching)
 		if err := session.SetCurrentAgent(name); err != nil {
 			return fmt.Errorf("could not save session state: %w", err)
 		}
 
-		// Save to global config (new terminals)
+		// Priority 2: global config (fallback for new terminals)
 		cfg.SelectedAgent = name
 		if err := config.Save(configDir, cfg); err != nil {
 			return err

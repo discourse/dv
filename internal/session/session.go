@@ -18,6 +18,13 @@ type State struct {
 	Sessions map[string]string `json:"sessions"` // session key -> agent name
 }
 
+// Test hooks: override in tests to simulate degraded environments.
+// Must not be overridden concurrently (non-parallel tests only).
+var (
+	parentPIDFn        = parentPID
+	processStartTimeFn = processStartTime
+)
+
 func sessionsPath() (string, error) {
 	runtimeDir, err := xdg.RuntimeDir()
 	if err != nil {
@@ -26,42 +33,62 @@ func sessionsPath() (string, error) {
 	return filepath.Join(runtimeDir, "sessions.json"), nil
 }
 
-// CurrentSID returns the session ID of the current terminal.
-func CurrentSID() (int, error) {
-	return unix.Getsid(0)
+// CurrentKey returns the identity key for this process's parent (the shell).
+// Key shape: pid:<ppid>:<starttime> (or pid:<ppid> when start time is unavailable).
+func CurrentKey() string {
+	return pidKey(os.Getppid())
 }
 
-// CurrentKey returns the identity key for this terminal/session.
-// Primary key shape: tty:<rdev>:ppid:<pid>
-// Fallback key shape: sid:<sid>
-func CurrentKey() (string, error) {
-	ttyRdev, err := currentTTYDeviceID()
-	if err == nil {
-		return fmt.Sprintf("tty:%d:ppid:%d", ttyRdev, os.Getppid()), nil
+// walkAncestors returns PIDs walking up the process tree from startPID.
+// Stops at PID 1 or when the chain breaks.
+// parentPID is provided per-platform in parentpid_{linux,other}.go.
+func walkAncestors(startPID int) []int {
+	var chain []int
+	seen := make(map[int]bool)
+	for pid := startPID; pid > 1 && !seen[pid]; {
+		seen[pid] = true
+		chain = append(chain, pid)
+		next := parentPIDFn(pid)
+		if next <= 0 {
+			break
+		}
+		pid = next
 	}
-
-	sid, err := CurrentSID()
-	if err != nil {
-		return "", err
-	}
-	return sidKey(sid), nil
+	return chain
 }
 
-func currentTTYDeviceID() (uint64, error) {
-	var st unix.Stat_t
-	if err := unix.Stat("/dev/tty", &st); err == nil {
-		return uint64(st.Rdev), nil
+func pidKey(pid int) string {
+	if st := processStartTimeFn(pid); st > 0 {
+		return fmt.Sprintf("pid:%d:%d", pid, st)
 	}
-	if err := unix.Fstat(0, &st); err == nil {
-		return uint64(st.Rdev), nil
+	return fmt.Sprintf("pid:%d", pid)
+}
+
+// parsePidKey extracts (pid, startTime) from a key like "pid:<pid>:<starttime>".
+// startTime is 0 when the key has no start-time component.
+func parsePidKey(key string) (pid int, startTime int64, ok bool) {
+	if !strings.HasPrefix(key, "pid:") {
+		return 0, 0, false
 	}
-	return 0, fmt.Errorf("unable to determine tty device")
+	rest := key[4:]
+	parts := strings.SplitN(rest, ":", 2)
+	pid, err := strconv.Atoi(parts[0])
+	if err != nil || pid <= 1 {
+		return 0, 0, false
+	}
+	if len(parts) == 2 {
+		st, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || st <= 0 {
+			return 0, 0, false
+		}
+		startTime = st
+	}
+	return pid, startTime, true
 }
 
 func processExists(pid int) bool {
-	// kill with signal 0 checks if process exists without sending signal
 	err := unix.Kill(pid, 0)
-	return err == nil
+	return err == nil || err == unix.EPERM
 }
 
 // Load reads the session state from disk.
@@ -70,7 +97,6 @@ func Load() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return loadFromPath(path)
 }
 
@@ -85,14 +111,6 @@ func (s *State) Save() error {
 		_ = normalizeAndClean(state)
 		return true, nil
 	})
-}
-
-func sidKey(sid int) string {
-	return fmt.Sprintf("sid:%d", sid)
-}
-
-func legacySIDKey(sid int) string {
-	return strconv.Itoa(sid)
 }
 
 func normalizeAndClean(s *State) (changed bool) {
@@ -110,56 +128,51 @@ func normalizeAndClean(s *State) (changed bool) {
 			continue
 		}
 
-		switch {
-		case strings.HasPrefix(key, "sid:"):
-			sidStr := strings.TrimPrefix(key, "sid:")
-			sid, err := strconv.Atoi(sidStr)
-			if err != nil || !processExists(sid) {
-				changed = true
-				continue
-			}
-			converted[sidKey(sid)] = agent
-		case isAllDigits(key):
-			sid, err := strconv.Atoi(key)
-			if err != nil || !processExists(sid) {
-				changed = true
-				continue
-			}
-			converted[sidKey(sid)] = agent
+		pid, storedST, ok := parsePidKey(key)
+		if !ok {
 			changed = true
-		case strings.HasPrefix(key, "tty:"):
-			parts := strings.Split(key, ":")
-			if len(parts) != 4 || parts[2] != "ppid" {
-				changed = true
-				continue
-			}
-			ppid, err := strconv.Atoi(parts[3])
-			if err != nil || !processExists(ppid) {
-				changed = true
-				continue
-			}
-			converted[key] = agent
-		default:
+			continue
+		}
+
+		if !processExists(pid) {
+			changed = true
+			continue
+		}
+
+		currentST := processStartTimeFn(pid)
+
+		// Detect PID reuse: stored and current start times both known but differ.
+		if storedST > 0 && currentST > 0 && storedST != currentST {
+			changed = true
+			continue
+		}
+
+		// PID-only key but start time is now available: can't verify
+		// identity, drop. The user must re-select; this is a one-time
+		// migration cost that prevents stale PID-only entries from being
+		// silently blessed onto a reused PID.
+		if storedST == 0 && currentST > 0 {
+			changed = true
+			continue
+		}
+
+		// Canonicalize PID formatting; preserve start-time status.
+		var canonical string
+		if storedST > 0 {
+			canonical = fmt.Sprintf("pid:%d:%d", pid, storedST)
+		} else {
+			canonical = fmt.Sprintf("pid:%d", pid)
+		}
+		if canonical != key {
 			changed = true
 		}
+		converted[canonical] = agent
 	}
 	if len(converted) != len(s.Sessions) {
 		changed = true
 	}
 	s.Sessions = converted
 	return changed
-}
-
-func isAllDigits(v string) bool {
-	if v == "" {
-		return false
-	}
-	for _, r := range v {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func lockPath(path string) string {
@@ -242,6 +255,38 @@ func (s *State) Set(key, agent string) {
 	s.Sessions[key] = strings.TrimSpace(agent)
 }
 
+// findByPID returns the (key, agent) for a given PID in the state.
+// Prefers the key with the highest start time (most specific match).
+func (s *State) findByPID(pid int) (key, agent string) {
+	if s == nil || s.Sessions == nil {
+		return "", ""
+	}
+	var bestST int64
+	for k, a := range s.Sessions {
+		p, st, ok := parsePidKey(k)
+		if !ok || p != pid {
+			continue
+		}
+		if key == "" || st > bestST {
+			key, agent, bestST = k, a, st
+		}
+	}
+	return key, agent
+}
+
+// deleteByPID removes all session entries for the given PID.
+func (s *State) deleteByPID(pid int) bool {
+	deleted := false
+	for k := range s.Sessions {
+		p, _, ok := parsePidKey(k)
+		if ok && p == pid {
+			delete(s.Sessions, k)
+			deleted = true
+		}
+	}
+	return deleted
+}
+
 func cloneSessions(in map[string]string) map[string]string {
 	if in == nil {
 		return map[string]string{}
@@ -253,93 +298,90 @@ func cloneSessions(in map[string]string) map[string]string {
 	return out
 }
 
-// GetCurrentAgent returns the agent for the current terminal session.
-func GetCurrentAgent() string {
-	key, err := CurrentKey()
-	if err != nil {
-		return ""
+// findEffectiveKey returns the nearest ancestor's stored key,
+// or computes a fresh key for ppid if no ancestor match exists.
+// Matches by parsed PID so lookups succeed even when processStartTime
+// temporarily fails to reproduce the stored key exactly.
+func findEffectiveKey(state *State, ppid int) string {
+	for _, pid := range walkAncestors(ppid) {
+		if key, _ := state.findByPID(pid); key != "" {
+			return key
+		}
 	}
-	sid, sidErr := CurrentSID()
-	var agent string
+	return pidKey(ppid)
+}
+
+// GetCurrentAgent returns the agent for the current terminal session.
+// Walks ancestor PIDs for pid:<PID> matches (nearest ancestor wins).
+func GetCurrentAgent() string {
+	ppid := os.Getppid()
 	path, err := sessionsPath()
 	if err != nil {
 		return ""
 	}
-	err = withLockedState(path, func(state *State) (bool, error) {
-		agent = state.Get(key)
-		if agent != "" {
-			return false, nil
-		}
-		// Backward compatibility for legacy numeric SID keys.
-		if sidErr == nil {
-			legacyKey := legacySIDKey(sid)
-			legacyAgent := state.Get(legacyKey)
-			if legacyAgent != "" {
-				state.Set(key, legacyAgent)
-				delete(state.Sessions, legacyKey)
-				agent = legacyAgent
-				return true, nil
+	var agent string
+	_ = withLockedState(path, func(state *State) (bool, error) {
+		for _, pid := range walkAncestors(ppid) {
+			if _, a := state.findByPID(pid); a != "" {
+				agent = a
+				return false, nil
 			}
 		}
 		return false, nil
 	})
-	if err != nil {
-		return ""
-	}
 	return agent
 }
 
-// SetCurrentAgent sets the agent for the current terminal session.
-func SetCurrentAgent(agent string) error {
-	key, err := CurrentKey()
-	if err != nil {
-		return err
+// clearAncestorKeys deletes all session entries along the ancestor chain.
+// Matches by parsed PID so clears succeed even when processStartTime
+// cannot reproduce the stored key exactly.
+func clearAncestorKeys(state *State, ppid int) bool {
+	changed := false
+	for _, pid := range walkAncestors(ppid) {
+		if state.deleteByPID(pid) {
+			changed = true
+		}
 	}
-	sid, sidErr := CurrentSID()
+	return changed
+}
+
+// SetCurrentAgent sets the agent for the current terminal session.
+// Resolves the effective key via ancestor walk so that nested shells
+// update the same key that GetCurrentAgent would read.
+// An empty agent clears all ancestor keys (same as ClearCurrentAgent).
+func SetCurrentAgent(agent string) error {
+	ppid := os.Getppid()
+	if ppid <= 1 {
+		return fmt.Errorf("no usable parent process (ppid=%d)", ppid)
+	}
 	path, err := sessionsPath()
 	if err != nil {
 		return err
 	}
 	agent = strings.TrimSpace(agent)
 	return withLockedState(path, func(state *State) (bool, error) {
-		before := state.Get(key)
 		if agent == "" {
-			delete(state.Sessions, key)
-		} else {
-			state.Set(key, agent)
+			return clearAncestorKeys(state, ppid), nil
 		}
-		if sidErr == nil {
-			delete(state.Sessions, legacySIDKey(sid))
-		}
-		after := state.Get(key)
-		return before != after, nil
+		key := findEffectiveKey(state, ppid)
+		before := state.Get(key)
+		state.Set(key, agent)
+		return before != agent, nil
 	})
 }
 
 // ClearCurrentAgent clears the current terminal session's selected agent.
+// Deletes all ancestor keys to prevent fallback resurfacing.
 func ClearCurrentAgent() error {
-	key, err := CurrentKey()
-	if err != nil {
-		return err
+	ppid := os.Getppid()
+	if ppid <= 1 {
+		return fmt.Errorf("no usable parent process (ppid=%d)", ppid)
 	}
-	sid, sidErr := CurrentSID()
 	path, err := sessionsPath()
 	if err != nil {
 		return err
 	}
 	return withLockedState(path, func(state *State) (bool, error) {
-		changed := false
-		if _, ok := state.Sessions[key]; ok {
-			delete(state.Sessions, key)
-			changed = true
-		}
-		if sidErr == nil {
-			legacy := legacySIDKey(sid)
-			if _, ok := state.Sessions[legacy]; ok {
-				delete(state.Sessions, legacy)
-				changed = true
-			}
-		}
-		return changed, nil
+		return clearAncestorKeys(state, ppid), nil
 	})
 }
