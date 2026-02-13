@@ -131,7 +131,13 @@ theme root so AI tooling understands the layout.`,
 		if len(args) == 0 {
 			return handleThemeScaffold(cmd, ctx, themeNameFlag)
 		}
-		return handleThemeClone(cmd, ctx, args[0], themeNameFlag)
+		t := templateTheme{
+			Repo:      args[0],
+			Name:      themeNameFlag,
+			AutoWatch: false,
+			Path:      "", // default
+		}
+		return handleThemeClone(cmd, ctx, t)
 	},
 }
 
@@ -199,18 +205,21 @@ func handleThemeScaffold(cmd *cobra.Command, ctx themeCommandContext, flagName s
 	return nil
 }
 
-func handleThemeClone(cmd *cobra.Command, ctx themeCommandContext, rawRepo string, flagName string) error {
-	repoURL, defaultName := normalizeThemeRepo(rawRepo)
+func handleThemeClone(cmd *cobra.Command, ctx themeCommandContext, theme templateTheme) error {
+	repoURL, defaultName := normalizeThemeRepo(theme.Repo)
 	if repoURL == "" {
-		return fmt.Errorf("could not determine repo URL from %q", rawRepo)
+		return fmt.Errorf("could not determine repo URL from %q", theme.Repo)
 	}
-	name := flagName
+	name := theme.Name
 	if name == "" {
 		name = defaultName
 	}
 	dirSlug := themeDirSlug(name)
 	serviceName := fmt.Sprintf("theme-watch-%s", dirSlug)
-	themePath := path.Join("/home/discourse", dirSlug)
+	themePath := theme.Path
+	if strings.TrimSpace(themePath) == "" {
+		themePath = path.Join("/home/discourse", dirSlug)
+	}
 	hostMirrorPath := ctx.hostMirrorPath(dirSlug)
 	if err := ensureContainerPathAvailable(ctx.containerName, themePath); err != nil {
 		return err
