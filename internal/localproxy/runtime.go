@@ -95,6 +95,16 @@ func EnsureContainer(configDir string, cfg config.LocalProxyConfig, recreate boo
 	args = append(args, "-e", "PROXY_HTTP_ADDR=:80")
 	args = append(args, "-e", "PROXY_API_ADDR=:2080")
 	args = append(args, "-e", "PROXY_HOSTNAME_SUFFIX="+cfg.Hostname)
+
+	dockerSocketSource := detectDockerSocketSource()
+	if dockerSocketSource != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/var/run/docker.sock", dockerSocketSource))
+		args = append(args, "-e", "PROXY_DOCKER_SOCKET=/var/run/docker.sock")
+		args = append(args, "-e", "PROXY_AUTO_HEAL=1")
+	} else {
+		// Graceful degradation: run proxy as before, but disable auto-heal.
+		args = append(args, "-e", "PROXY_AUTO_HEAL=0")
+	}
 	if cfg.HTTPS {
 		certPath, keyPath := TLSPaths(configDir)
 		if !fileNonEmpty(certPath) || !fileNonEmpty(keyPath) {
@@ -120,4 +130,50 @@ func updateRestartPolicy(name string) {
 	cmd := exec.Command("docker", "update", "--restart", "unless-stopped", name)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	_ = cmd.Run()
+}
+
+func detectDockerSocketSource() string {
+	homeDir, _ := os.UserHomeDir()
+	return detectDockerSocketSourceWith(strings.TrimSpace(os.Getenv("DOCKER_HOST")), homeDir, socketPathExists)
+}
+
+func detectDockerSocketSourceWith(dockerHost string, homeDir string, exists func(string) bool) string {
+	if exists == nil {
+		return ""
+	}
+	dockerHost = strings.TrimSpace(dockerHost)
+	if dockerHost != "" {
+		if strings.HasPrefix(dockerHost, "unix://") {
+			path := strings.TrimSpace(strings.TrimPrefix(dockerHost, "unix://"))
+			if path != "" && exists(path) {
+				return path
+			}
+		} else {
+			// Non-unix Docker endpoints (tcp/ssh/etc.) are not mountable into the
+			// local proxy container, so disable auto-heal.
+			return ""
+		}
+	}
+
+	candidates := []string{"/var/run/docker.sock"}
+	if trimmedHome := strings.TrimSpace(homeDir); trimmedHome != "" {
+		// Docker Desktop for macOS commonly exposes a user-level socket here.
+		candidates = append(candidates, filepath.Join(trimmedHome, ".docker", "run", "docker.sock"))
+		// OrbStack commonly exposes a user-level socket here.
+		candidates = append(candidates, filepath.Join(trimmedHome, ".orbstack", "run", "docker.sock"))
+	}
+	for _, candidate := range candidates {
+		if exists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func socketPathExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
