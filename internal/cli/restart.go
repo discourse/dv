@@ -45,6 +45,13 @@ var restartCmd = &cobra.Command{
 		}
 
 		if docker.Running(name) {
+			force, _ := cmd.Flags().GetBool("force")
+			if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
+				return err
+			} else if !proceed {
+				return nil
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "Stopping container '%s'...\n", name)
 			if err := docker.Stop(name); err != nil {
 				return err
@@ -63,4 +70,5 @@ var restartCmd = &cobra.Command{
 
 func init() {
 	restartCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
+	restartCmd.Flags().BoolP("force", "f", false, "Skip active session warning")
 }

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -827,6 +828,114 @@ func GetContainerWorkdir(name string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// TopProcess represents a single process from docker top output.
+type TopProcess struct {
+	PID  int
+	PPID int
+	User string
+	Args string
+}
+
+// ExecSession represents a docker exec'd process detected via orphan-PPID analysis.
+type ExecSession struct {
+	PID     int
+	User    string
+	Command string
+}
+
+// TopProcesses runs `docker top <name> -o pid,ppid,user,args` and parses the output.
+func TopProcesses(name string) ([]TopProcess, error) {
+	cmd := exec.Command("docker", "top", name, "-o", "pid,ppid,user,args")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker top %s: %w", name, err)
+	}
+	return ParseTopOutput(string(out))
+}
+
+// ParseTopOutput parses the text output of `docker top` with columns pid,ppid,user,args.
+func ParseTopOutput(output string) ([]TopProcess, error) {
+	var procs []TopProcess
+	for i, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || i == 0 { // skip header
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		procs = append(procs, TopProcess{
+			PID:  pid,
+			PPID: ppid,
+			User: fields[2],
+			Args: strings.Join(fields[3:], " "),
+		})
+	}
+	return procs, nil
+}
+
+// containerInitPID returns the host PID of the container's init process
+// via `docker inspect`.
+func containerInitPID(name string) (int, error) {
+	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Pid}}", name).Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// ExecSessions detects docker exec'd processes by finding processes whose PPID
+// does not belong to any other process inside the container (orphan-PPID detection).
+// The container's init process is excluded since it also has an external PPID.
+// docker top shows host PIDs, so we use docker inspect to find the init PID.
+func ExecSessions(name string) ([]ExecSession, error) {
+	procs, err := TopProcesses(name)
+	if err != nil {
+		return nil, err
+	}
+
+	initPID, err := containerInitPID(name)
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine container init PID for %s: %w", name, err)
+	}
+
+	return FindExecSessions(procs, initPID), nil
+}
+
+// FindExecSessions filters a process list for orphan-PPID entries, excluding initPID.
+// A process has an "orphan PPID" when its PPID doesn't match any other PID in the list,
+// meaning its parent lives outside the container (containerd-shim for docker exec).
+func FindExecSessions(procs []TopProcess, initPID int) []ExecSession {
+	pids := make(map[int]bool, len(procs))
+	for _, p := range procs {
+		pids[p.PID] = true
+	}
+
+	var sessions []ExecSession
+	for _, p := range procs {
+		if p.PID == initPID {
+			continue
+		}
+		if !pids[p.PPID] {
+			sessions = append(sessions, ExecSession{
+				PID:     p.PID,
+				User:    p.User,
+				Command: p.Args,
+			})
+		}
+	}
+	return sessions
 }
 
 // GetContainerEnv returns environment variables set on a container as a map.

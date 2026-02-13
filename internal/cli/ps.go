@@ -10,12 +10,11 @@ import (
 	"dv/internal/xdg"
 )
 
-var stopCmd = &cobra.Command{
-	Use:   "stop [name]",
-	Short: "Stop the container",
+var psCmd = &cobra.Command{
+	Use:   "ps [name]",
+	Short: "Show active exec sessions in a container",
 	Args:  cobra.MaximumNArgs(1),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		// Complete container name for the first positional argument
 		if len(args) == 0 {
 			return completeAgentNames(cmd, toComplete)
 		}
@@ -31,7 +30,6 @@ var stopCmd = &cobra.Command{
 			return err
 		}
 
-		// Priority: positional arg > --name flag > config
 		name, _ := cmd.Flags().GetString("name")
 		if len(args) > 0 {
 			name = args[0]
@@ -44,23 +42,31 @@ var stopCmd = &cobra.Command{
 			return nil
 		}
 		if !docker.Running(name) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' is already stopped\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' is not running\n", name)
 			return nil
 		}
 
-		force, _ := cmd.Flags().GetBool("force")
-		if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
+		sessions, err := docker.ExecSessions(name)
+		if err != nil {
 			return err
-		} else if !proceed {
+		}
+
+		if len(sessions) == 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "No active sessions in '%s'\n", name)
 			return nil
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Stopping container '%s'...\n", name)
-		return docker.Stop(name)
+		fmt.Fprintf(cmd.OutOrStdout(), "Active sessions in '%s':\n", name)
+		for _, s := range sessions {
+			label := classifySession(s.Command)
+			cmdDisplay := truncateCmd(s.Command, 40)
+			fmt.Fprintf(cmd.OutOrStdout(), "  PID %-8d %-12s %-42s (%s)\n", s.PID, s.User, cmdDisplay, label)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\n%d active session(s)\n", len(sessions))
+		return nil
 	},
 }
 
 func init() {
-	stopCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
-	stopCmd.Flags().BoolP("force", "f", false, "Skip active session warning")
+	psCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
 }

@@ -517,7 +517,7 @@ func (m *aiConfigModel) updateLists() {
 		items = append(items, llmItem{model: entry, isDefault: entry.ID == m.state.DefaultID})
 	}
 	m.llmList.SetItems(items)
-	m.catalog = m.catalog // no-op placeholder; kept for future use.
+	_ = m.catalog // kept for future use
 }
 
 func (m aiConfigModel) View() string {

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"dv/internal/config"
+	"dv/internal/docker"
 	"dv/internal/localproxy"
 	"dv/internal/xdg"
 )
@@ -119,6 +120,21 @@ var listCmd = &cobra.Command{
 
 		sortAgents(agents)
 
+		withSessions, _ := cmd.Flags().GetBool("sessions")
+		if withSessions {
+			for i, agent := range agents {
+				if agent.status == "Running" {
+					s, err := docker.ExecSessions(agent.name)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not check sessions for '%s': %v\n", agent.name, err)
+						agents[i].sessions = -1
+					} else {
+						agents[i].sessions = len(s)
+					}
+				}
+			}
+		}
+
 		// Print in ls -l style format
 		if len(agents) == 0 {
 			fmt.Fprintf(cmd.OutOrStdout(), "(no agents found for image '%s')\n", imgCfg.Tag)
@@ -132,12 +148,22 @@ var listCmd = &cobra.Command{
 				if agent.selected {
 					mark = "*"
 				}
+				sessionSuffix := ""
+				if agent.sessions < 0 {
+					sessionSuffix = "  [sessions: ?]"
+				} else if agent.sessions > 0 {
+					sessionSuffix = fmt.Sprintf("  [%d session", agent.sessions)
+					if agent.sessions != 1 {
+						sessionSuffix += "s"
+					}
+					sessionSuffix += "]"
+				}
 				if len(agent.urls) > 0 {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s %-*s %-8s %-12s %s\n",
-						mark, maxNameWidth, agent.name, agent.status, agent.time, strings.Join(agent.urls, " "))
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %-*s %-8s %-12s %s%s\n",
+						mark, maxNameWidth, agent.name, agent.status, agent.time, strings.Join(agent.urls, " "), sessionSuffix)
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s %-*s %-8s %-12s\n",
-						mark, maxNameWidth, agent.name, agent.status, agent.time)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %-*s %-8s %-12s%s\n",
+						mark, maxNameWidth, agent.name, agent.status, agent.time, sessionSuffix)
 				}
 			}
 		}
@@ -150,6 +176,10 @@ var listCmd = &cobra.Command{
 		_ = imgName // not printed but kept for clarity
 		return nil
 	},
+}
+
+func init() {
+	listCmd.Flags().BoolP("sessions", "s", false, "Show active session counts (slower)")
 }
 
 // parseHostPortURLs extracts host ports from a Docker "Ports" column value and
@@ -234,6 +264,7 @@ type agentInfo struct {
 	createdAt time.Time
 	urls      []string
 	selected  bool
+	sessions  int
 }
 
 // calculateMaxNameWidth finds the longest agent name and returns an appropriate column width

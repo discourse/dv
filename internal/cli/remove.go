@@ -55,6 +55,13 @@ var removeCmd = &cobra.Command{
 		}
 
 		if docker.Exists(name) {
+			force, _ := cmd.Flags().GetBool("force")
+			if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
+				return err
+			} else if !proceed {
+				return nil
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "Stopping and removing container '%s'...\n", name)
 			if docker.Running(name) {
 				_ = docker.RemoveForce(name)
@@ -146,4 +153,5 @@ var removeCmd = &cobra.Command{
 func init() {
 	removeCmd.Flags().Bool("image", false, "Also remove the Docker image after removing container")
 	removeCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
+	removeCmd.Flags().BoolP("force", "f", false, "Skip active session warning")
 }

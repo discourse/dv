@@ -288,6 +288,79 @@ func shellJoin(argv []string) string {
 	return strings.Join(quoted, " ")
 }
 
+// classifySession determines a human-readable label for an exec session based
+// on its command string. It checks against known agent names from agentRules.
+func classifySession(command string) string {
+	lower := strings.ToLower(command)
+	fields := strings.Fields(lower)
+	if len(fields) == 0 {
+		return "unknown"
+	}
+
+	for agentName := range agentRules {
+		for _, f := range fields {
+			base := f
+			if idx := strings.LastIndex(f, "/"); idx >= 0 {
+				base = f[idx+1:]
+			}
+			if base == agentName {
+				return "agent: " + agentName
+			}
+		}
+	}
+
+	for _, f := range fields {
+		base := f
+		if idx := strings.LastIndex(f, "/"); idx >= 0 {
+			base = f[idx+1:]
+		}
+		switch base {
+		case "bash", "sh", "zsh", "fish":
+			return "shell"
+		}
+	}
+
+	return "process"
+}
+
+func truncateCmd(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// warnActiveSessions checks for active exec sessions in a running container.
+// If sessions are found and force is false, it prints a warning and prompts
+// the user for confirmation. Returns true if the caller should proceed.
+// When session detection fails, it warns and requires --force or confirmation.
+func warnActiveSessions(cmd *cobra.Command, name string, force bool) (bool, error) {
+	if !docker.Running(name) {
+		return true, nil
+	}
+	sessions, err := docker.ExecSessions(name)
+	if err != nil {
+		if force {
+			return true, nil
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not check active sessions in '%s': %v\n", name, err)
+		return promptYesNo(cmd.InOrStdin(), cmd.ErrOrStderr(), "Continue anyway? (y/N): ")
+	}
+	if len(sessions) == 0 {
+		return true, nil
+	}
+	if force {
+		return true, nil
+	}
+
+	fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %d active session(s) in '%s':\n", len(sessions), name)
+	for _, s := range sessions {
+		label := classifySession(s.Command)
+		fmt.Fprintf(cmd.ErrOrStderr(), "  - %s (%s)\n", truncateCmd(s.Command, 60), label)
+	}
+	return promptYesNo(cmd.InOrStdin(), cmd.ErrOrStderr(), "Continue? (y/N): ")
+}
+
 func ensureContainerRunning(cmd *cobra.Command, cfg config.Config, name string, reset bool, sshAuthSock string) error {
 	// Fallback: if container has a recorded image, use that; else use selected image
 	imgName := cfg.ContainerImages[name]
