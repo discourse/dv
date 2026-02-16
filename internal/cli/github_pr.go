@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -52,6 +54,9 @@ type prCompletionCache struct {
 
 const prCompletionCacheTTL = 45 * time.Second
 
+var ghAuthTokenOnce sync.Once
+var ghAuthTokenCached string
+
 func githubAuthToken() string {
 	if tok := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); tok != "" {
 		return tok
@@ -62,7 +67,13 @@ func githubAuthToken() string {
 	if tok := strings.TrimSpace(os.Getenv("GITHUB_PAT")); tok != "" {
 		return tok
 	}
-	return ""
+	ghAuthTokenOnce.Do(func() {
+		out, err := exec.Command("gh", "auth", "token").Output()
+		if err == nil {
+			ghAuthTokenCached = strings.TrimSpace(string(out))
+		}
+	})
+	return ghAuthTokenCached
 }
 
 func applyGitHubHeaders(req *http.Request) {
