@@ -1083,28 +1083,30 @@ const (
 )
 
 type formField struct {
-	Key          string
-	Label        string
-	Kind         fieldKind
-	Model        textinput.Model
-	BoolValue    bool
-	SelectValue  string
-	SelectValues []string
-	IsProvider   bool
+	Key           string
+	Label         string
+	Kind          fieldKind
+	Model         textinput.Model
+	BoolValue     bool
+	SelectValue   string
+	SelectValues  []string
+	IsProvider    bool
+	OriginalValue string // preserves numeric AiSecret ID for secret fields
 }
 
 type createForm struct {
-	entryID     string
-	fields      []*formField
-	focusIndex  int
-	err         string
-	mode        formMode
-	editingID   int64
-	testSuccess bool
-	viewport    viewport.Model
-	width       int
-	height      int
-	ready       bool
+	entryID            string
+	fields             []*formField
+	focusIndex         int
+	err                string
+	mode               formMode
+	editingID          int64
+	existingAiSecretID int64
+	testSuccess        bool
+	viewport           viewport.Model
+	width              int
+	height             int
+	ready              bool
 }
 
 func newCreateForm(entryID string, model ai.ProviderModel, meta ai.LLMMetadata, env map[string]string) *createForm {
@@ -1176,11 +1178,12 @@ func newEditForm(llm ai.LLMModel, meta ai.LLMMetadata, isDefault bool) *createFo
 	fields = append(fields, buildProviderParamFields(llm.Provider, meta, llm.ProviderParams, nil)...)
 	vp := viewport.New(0, 0)
 	f := &createForm{
-		fields:    fields,
-		entryID:   providerSlug(llm.Provider),
-		mode:      formModeEdit,
-		editingID: llm.ID,
-		viewport:  vp,
+		fields:             fields,
+		entryID:            providerSlug(llm.Provider),
+		mode:               formModeEdit,
+		editingID:          llm.ID,
+		existingAiSecretID: llm.AiSecretID,
+		viewport:           vp,
 	}
 	fields[5].Model.Placeholder = "Leave blank to keep current key"
 	f.updateFocus()
@@ -1198,6 +1201,9 @@ func newTextField(key, label, value string, mask bool) *formField {
 			builder.Value(&value)
 		}
 		ti = builder.Model()
+		if value == "" {
+			ti.Placeholder = "Leave blank to keep current"
+		}
 	} else {
 		ti = textinput.New()
 		ti.Placeholder = label
@@ -1511,6 +1517,7 @@ func (f *createForm) payload() (discourse.CreateLLMInput, error) {
 	var payload discourse.CreateLLMInput
 	if f.isEdit() {
 		payload.ExistingID = f.targetID()
+		payload.ExistingAiSecretID = f.existingAiSecretID
 	}
 	payload.Provider = providerSlug(f.value("provider"))
 	payload.DisplayName = strings.TrimSpace(f.value("display_name"))
@@ -1604,6 +1611,8 @@ func (f *createForm) providerParamsMap() map[string]interface{} {
 			val := strings.TrimSpace(field.Model.Value())
 			if val != "" {
 				params[field.Key] = val
+			} else if field.OriginalValue != "" {
+				params[field.Key] = field.OriginalValue // preserve existing AiSecret reference
 			}
 		case fieldSelect:
 			params[field.Key] = field.SelectValue
@@ -1636,6 +1645,18 @@ func providerSlug(entryID string) string {
 	}
 }
 
+func isNumericString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func buildProviderParamFields(provider string, meta ai.LLMMetadata, existing map[string]interface{}, defaults map[string]interface{}) []*formField {
 	slug := providerSlug(strings.TrimSpace(provider))
 	if slug == "" {
@@ -1662,8 +1683,16 @@ func buildProviderParamFields(provider string, meta ai.LLMMetadata, existing map
 				field.IsProvider = true
 				fields = append(fields, field)
 			} else {
-				field := newTextField(name, label, defaultString("", existing, defaults, name), false)
+				isMasked := def == "secret"
+				existingVal := defaultString("", existing, defaults, name)
+				origVal := ""
+				if isMasked && isNumericString(existingVal) {
+					origVal = existingVal // store numeric AiSecret ID
+					existingVal = ""      // don't display the ID
+				}
+				field := newTextField(name, label, existingVal, isMasked)
 				field.IsProvider = true
+				field.OriginalValue = origVal
 				fields = append(fields, field)
 			}
 		case map[string]interface{}:

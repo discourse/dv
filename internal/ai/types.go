@@ -28,6 +28,7 @@ type LLMModel struct {
 	OutputCost       float64                  `json:"output_cost"`
 	EnabledChatBot   bool                     `json:"enabled_chat_bot"`
 	VisionEnabled    bool                     `json:"vision_enabled"`
+	AiSecretID       int64                    `json:"ai_secret_id"`
 	ProviderParams   map[string]interface{}   `json:"provider_params"`
 	UsedBy           []LLMUsage               `json:"used_by"`
 	Quotas           []LLMQuota               `json:"llm_quotas"`
@@ -45,12 +46,19 @@ type TokenizerMeta struct {
 	Name string `json:"name"`
 }
 
+// AiSecret represents a stored credential in the ai_secrets table.
+type AiSecret struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 // LLMMetadata includes supplemental information returned from Discourse.
 type LLMMetadata struct {
 	Tokenizers     []TokenizerMeta                   `json:"tokenizers"`
 	Providers      []string                          `json:"providers"`
 	ProviderParams map[string]map[string]interface{} `json:"provider_params"`
 	Presets        json.RawMessage                   `json:"presets"`
+	AiSecrets      []AiSecret                        `json:"ai_secrets"`
 }
 
 // LLMState is the aggregate payload consumed by the TUI.

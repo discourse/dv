@@ -17,22 +17,23 @@ type LLMListResponse struct {
 
 // CreateLLMInput captures the attributes for creating/updating an LLM
 type CreateLLMInput struct {
-	DisplayName     string
-	Name            string
-	Provider        string
-	Tokenizer       string
-	URL             string
-	APIKey          string
-	MaxPromptTokens int
-	MaxOutputTokens int
-	InputCost       float64
-	CachedInputCost float64
-	OutputCost      float64
-	EnabledChatBot  bool
-	VisionEnabled   bool
-	ProviderParams  map[string]interface{}
-	SetAsDefault    bool
-	ExistingID      int64
+	DisplayName        string
+	Name               string
+	Provider           string
+	Tokenizer          string
+	URL                string
+	APIKey             string
+	MaxPromptTokens    int
+	MaxOutputTokens    int
+	InputCost          float64
+	CachedInputCost    float64
+	OutputCost         float64
+	EnabledChatBot     bool
+	VisionEnabled      bool
+	ProviderParams     map[string]interface{}
+	SetAsDefault       bool
+	ExistingID         int64
+	ExistingAiSecretID int64
 }
 
 // ListLLMs retrieves all configured LLM models
@@ -250,6 +251,9 @@ func buildLLMPayload(input CreateLLMInput) map[string]interface{} {
 	llm := payload["ai_llm"].(map[string]interface{})
 	if apiKey := strings.TrimSpace(input.APIKey); apiKey != "" {
 		llm["api_key"] = apiKey
+		if input.ExistingAiSecretID > 0 {
+			llm["ai_secret_id"] = nil // clear old AiSecret reference so inline key takes effect
+		}
 	}
 	if input.ProviderParams != nil {
 		llm["provider_params"] = input.ProviderParams
