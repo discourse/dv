@@ -20,6 +20,18 @@ type bedrockPricing struct {
 }
 
 var bedrockModelPricing = map[string]bedrockPricing{
+	"us.anthropic.claude-opus-4-6-v1": {
+		InputCost:       5.0,
+		CachedInputCost: 0.50,
+		OutputCost:      25.0,
+		ContextTokens:   200000,
+	},
+	"us.anthropic.claude-sonnet-4-6": {
+		InputCost:       3.0,
+		CachedInputCost: 0.30,
+		OutputCost:      15.0,
+		ContextTokens:   200000,
+	},
 	"us.anthropic.claude-sonnet-4-5-20250929-v1:0": {
 		InputCost:       3.0,
 		CachedInputCost: 0.30,
@@ -76,8 +88,10 @@ func (c *bedrockConnector) fetch(ctx context.Context, client *http.Client, env m
 	now := time.Now()
 	models := []ai.ProviderModel{}
 
-	// Return hardcoded Sonnet 4.5 and Haiku 4.5 models
+	// Return hardcoded models
 	modelIDs := []string{
+		"us.anthropic.claude-opus-4-6-v1",
+		"us.anthropic.claude-sonnet-4-6",
 		"us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		"us.anthropic.claude-haiku-4-5-20251001-v1:0",
 	}
