@@ -23,6 +23,7 @@ type CreateLLMInput struct {
 	Tokenizer          string
 	URL                string
 	APIKey             string
+	AiSecretID         int64 // use a pre-created AiSecret instead of raw APIKey
 	MaxPromptTokens    int
 	MaxOutputTokens    int
 	InputCost          float64
@@ -249,7 +250,9 @@ func buildLLMPayload(input CreateLLMInput) map[string]interface{} {
 	}
 
 	llm := payload["ai_llm"].(map[string]interface{})
-	if apiKey := strings.TrimSpace(input.APIKey); apiKey != "" {
+	if input.AiSecretID > 0 {
+		llm["ai_secret_id"] = input.AiSecretID
+	} else if apiKey := strings.TrimSpace(input.APIKey); apiKey != "" {
 		llm["api_key"] = apiKey
 		if input.ExistingAiSecretID > 0 {
 			llm["ai_secret_id"] = nil // clear old AiSecret reference so inline key takes effect

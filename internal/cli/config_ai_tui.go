@@ -772,6 +772,24 @@ func (m aiConfigModel) createModelCmd(payload discourse.CreateLLMInput) tea.Cmd 
 	client := m.client
 	ctx := m.ctx
 	return func() tea.Msg {
+		// For Bedrock, store credentials as AiSecrets so they display correctly in Discourse admin.
+		if payload.Provider == "aws_bedrock" {
+			if payload.APIKey != "" {
+				id, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Secret Access Key", payload.APIKey)
+				if err != nil {
+					return aiErrMsg{err}
+				}
+				payload.AiSecretID = id
+				payload.APIKey = ""
+			}
+			if accessKey, ok := payload.ProviderParams["access_key_id"].(string); ok && accessKey != "" && !isNumericString(accessKey) {
+				id, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Access Key ID", accessKey)
+				if err != nil {
+					return aiErrMsg{err}
+				}
+				payload.ProviderParams["access_key_id"] = fmt.Sprintf("%d", id)
+			}
+		}
 		if _, err := client.CreateModel(ctx, payload); err != nil {
 			return aiErrMsg{err}
 		}
@@ -798,6 +816,31 @@ func (m aiConfigModel) updateModelCmd(id int64, payload discourse.CreateLLMInput
 	client := m.client
 	ctx := m.ctx
 	return func() tea.Msg {
+		// For Bedrock, keep credentials in AiSecrets.
+		if payload.Provider == "aws_bedrock" {
+			if payload.APIKey != "" {
+				if payload.ExistingAiSecretID > 0 {
+					if err := client.UpdateAiSecret(ctx, payload.ExistingAiSecretID, payload.APIKey); err != nil {
+						return aiErrMsg{err}
+					}
+					payload.AiSecretID = payload.ExistingAiSecretID
+				} else {
+					secretID, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Secret Access Key", payload.APIKey)
+					if err != nil {
+						return aiErrMsg{err}
+					}
+					payload.AiSecretID = secretID
+				}
+				payload.APIKey = ""
+			}
+			if accessKey, ok := payload.ProviderParams["access_key_id"].(string); ok && accessKey != "" && !isNumericString(accessKey) {
+				secretID, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Access Key ID", accessKey)
+				if err != nil {
+					return aiErrMsg{err}
+				}
+				payload.ProviderParams["access_key_id"] = fmt.Sprintf("%d", secretID)
+			}
+		}
 		if err := client.UpdateModel(ctx, id, payload); err != nil {
 			return aiErrMsg{err}
 		}

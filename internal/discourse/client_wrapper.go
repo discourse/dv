@@ -92,5 +92,21 @@ func (c *ClientWrapper) EnableFeatures(ctx context.Context, settings []string, e
 	return nil
 }
 
+// CreateAiSecret creates a named credential secret
+func (c *ClientWrapper) CreateAiSecret(ctx context.Context, name, secret string) (int64, error) {
+	if err := c.Client.EnsureAPIKey(); err != nil {
+		return 0, err
+	}
+	return c.Client.CreateAiSecret(name, secret)
+}
+
+// UpdateAiSecret replaces the value of an existing credential secret
+func (c *ClientWrapper) UpdateAiSecret(ctx context.Context, id int64, secret string) error {
+	if err := c.Client.EnsureAPIKey(); err != nil {
+		return err
+	}
+	return c.Client.UpdateAiSecret(id, secret)
+}
+
 // Ensure ClientWrapper implements DiscourseClient
 var _ DiscourseClient = (*ClientWrapper)(nil)

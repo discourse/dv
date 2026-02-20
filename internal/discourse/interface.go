@@ -15,4 +15,6 @@ type DiscourseClient interface {
 	TestModel(ctx context.Context, input CreateLLMInput) error
 	SetDefaultLLM(ctx context.Context, id int64) error
 	EnableFeatures(ctx context.Context, settings []string, env map[string]string) error
+	CreateAiSecret(ctx context.Context, name, secret string) (int64, error)
+	UpdateAiSecret(ctx context.Context, id int64, secret string) error
 }
