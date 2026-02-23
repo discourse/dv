@@ -6,7 +6,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Update Discourse repo to latest main and refresh deps
-RUN sudo -H -u discourse /bin/bash -lc "set -euo pipefail; cd /var/www/discourse; if [ -f .git/shallow ]; then git fetch origin --tags --prune --unshallow; else git fetch origin --tags --prune; fi; git fetch origin main; git checkout -B main origin/main; git reset --hard origin/main"
+RUN sudo -H -u discourse /bin/bash -lc "set -euo pipefail; cd /var/www/discourse; if [ -f .git/shallow ]; then git fetch origin --tags --force --prune --unshallow; else git fetch origin --tags --force --prune; fi; git fetch origin main; git checkout -B main origin/main; git reset --hard origin/main"
 
 RUN sudo -H -u discourse /bin/bash -lc "set -euo pipefail; cd /var/www/discourse; bundle install; pnpm install"
 
