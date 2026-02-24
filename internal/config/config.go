@@ -26,6 +26,7 @@ type Config struct {
 	EnvPassthrough      []string `json:"envPassthrough"`
 	DiscourseRepo       string   `json:"discourseRepo"`
 	ExtractBranchPrefix string   `json:"extractBranchPrefix"`
+	ServeToken          string   `json:"serveToken,omitempty"`
 
 	// New image model (supersedes legacy fields above)
 	// SelectedImage is the name of the currently selected image (must always be set)

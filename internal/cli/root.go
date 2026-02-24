@@ -91,6 +91,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	rootCmd.AddCommand(pullCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(serveCmd)
 
 	setupUpdateChecks()
 	setupUpgradeCommand()
