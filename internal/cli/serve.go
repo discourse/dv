@@ -69,6 +69,8 @@ var serveCmd = &cobra.Command{
 			errCh <- srv.ListenAndServe()
 		}()
 
+		fmt.Fprintf(cmd.OutOrStdout(), "Listening on http://%s\n", srv.Addr)
+
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
