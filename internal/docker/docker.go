@@ -442,6 +442,21 @@ func ExecInteractive(name, workdir string, envs Envs, argv []string) error {
 	return cmd.Run()
 }
 
+// ExecStream runs a command inside the container as the discourse user and streams output to writers.
+// Use nil for envs when no environment variables are needed.
+func ExecStream(name, workdir string, envs Envs, argv []string, stdout, stderr io.Writer) error {
+	args := []string{"exec", "--user", "discourse", "-w", workdir}
+	for _, e := range envs {
+		args = append(args, "-e", e)
+	}
+	args = append(args, name)
+	args = append(args, argv...)
+	cmd := exec.Command("docker", args...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd.Run()
+}
+
 // ExecInteractiveAsRoot runs an interactive command inside the container as root.
 func ExecInteractiveAsRoot(name, workdir string, envs Envs, argv []string) error {
 	args := []string{"exec", "-i", "--user", "root", "-w", workdir}
