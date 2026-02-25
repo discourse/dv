@@ -23,7 +23,8 @@ type Config struct {
 	HostStartingPort    int      `json:"hostStartingPort"`
 	ContainerPort       int      `json:"containerPort"`
 	SelectedAgent       string   `json:"selectedAgent"`
-	EnvPassthrough      []string `json:"envPassthrough"`
+	EnvPassthrough      []string          `json:"envPassthrough"`
+	Env                 map[string]string `json:"env,omitempty"`
 	DiscourseRepo       string   `json:"discourseRepo"`
 	ExtractBranchPrefix string   `json:"extractBranchPrefix"`
 	ServeToken          string   `json:"serveToken,omitempty"`

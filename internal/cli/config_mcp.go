@@ -66,12 +66,7 @@ var configMcpCmd = &cobra.Command{
 		mcpName := strings.ToLower(strings.TrimSpace(args[0]))
 
 		// Prepare env pass-through so tools like 'claude' have credentials
-		envs := make(docker.Envs, 0, len(cfg.EnvPassthrough))
-		for _, key := range cfg.EnvPassthrough {
-			if val, ok := os.LookupEnv(key); ok && val != "" {
-				envs = append(envs, key)
-			}
-		}
+		envs := collectEnvPassthrough(cfg)
 		if _, ok := os.LookupEnv("ANTHROPIC_API_KEY"); !ok {
 			fmt.Fprintln(cmd.ErrOrStderr(), "Warning: ANTHROPIC_API_KEY is not set on host; 'claude' may fail.")
 		}

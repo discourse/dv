@@ -263,13 +263,7 @@ func buildAgentEnv(cfg config.Config, agent string, cmd *cobra.Command) docker.E
 		return envs
 	}
 
-	envs := make(docker.Envs, 0, len(cfg.EnvPassthrough)+3)
-	for _, key := range cfg.EnvPassthrough {
-		if val, ok := os.LookupEnv(key); ok && strings.TrimSpace(val) != "" {
-			// docker exec -e KEY will copy host value
-			envs = append(envs, key)
-		}
-	}
+	envs := collectEnvPassthrough(cfg)
 
 	if rule, ok := agentRules[agent]; ok {
 		envs = append(envs, rule.env...)
@@ -356,7 +350,7 @@ var agentRules = map[string]agentRule{
 	"claude": {
 		interactive: func() []string { return []string{"claude"} },
 		withPrompt:  func(p string) []string { return []string{"claude", "-p", p} },
-		defaults:    []string{"--dangerously-skip-permissions"},
+		defaults:    []string{"--dangerously-skip-permissions", "--model", "opus", "--effort", "high"},
 	},
 	"gemini": {
 		interactive: func() []string { return []string{"gemini"} },

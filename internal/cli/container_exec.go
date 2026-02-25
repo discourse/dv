@@ -313,11 +313,14 @@ func deepMerge(dst, src map[string]any, mergeKey string) map[string]any {
 }
 
 func collectEnvPassthrough(cfg config.Config) docker.Envs {
-	envs := make(docker.Envs, 0, len(cfg.EnvPassthrough)+1)
+	envs := make(docker.Envs, 0, len(cfg.EnvPassthrough)+len(cfg.Env)+1)
 	for _, key := range cfg.EnvPassthrough {
 		if val, ok := os.LookupEnv(key); ok && val != "" {
 			envs = append(envs, key)
 		}
+	}
+	for k, v := range cfg.Env {
+		envs = append(envs, k+"="+v)
 	}
 	return envs
 }
