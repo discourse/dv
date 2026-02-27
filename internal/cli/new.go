@@ -33,6 +33,12 @@ var newCmd = &cobra.Command{
 		}
 
 		templatePath, _ := cmd.Flags().GetString("template")
+
+		// Fall back to config default if flag not provided
+		if templatePath == "" && cfg.DefaultTemplate != "" {
+			templatePath = cfg.DefaultTemplate
+		}
+
 		var tpl *templateConfig
 		if templatePath != "" {
 			var data []byte
@@ -165,7 +171,11 @@ var newCmd = &cobra.Command{
 		if err = config.Save(configDir, cfg); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Creating agent '%s' from image '%s'...\n", name, imageTag)
+		if templatePath != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Creating agent '%s' from image '%s' (using template: %s)...\n", name, imageTag, templatePath)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Creating agent '%s' from image '%s'...\n", name, imageTag)
+		}
 		// initialize container by running a no-op command
 		var templateEnvs map[string]string
 		if tpl != nil {
@@ -354,6 +364,25 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 		}
 		if err := docker.ExecInteractive(name, workdir, envList, []string{"bash", "-lc", cloneCmd}); err != nil {
 			return fmt.Errorf("failed to clone plugin %s: %w", p.Repo, err)
+		}
+	}
+
+	// 4.5. Copy configured files (credentials, etc.) into the container according to template rules
+	// This happens after plugins are cloned but before bundle/migrate
+	// so that any copied credentials are available for subsequent operations
+	for _, rule := range tpl.Copy {
+		// Expand host path to handle ~, env vars, and relative paths
+		expandedHostPaths := expandHostSources(rule.Host)
+		if len(expandedHostPaths) == 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: no files found matching %s\n", rule.Host)
+			continue
+		}
+
+		for _, hostPath := range expandedHostPaths {
+			fmt.Fprintf(cmd.OutOrStdout(), "Copying %s to %s...\n", hostPath, rule.Container)
+			if err := copyHostToContainer(hostPath, rule.Container, name, verbose); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to copy %s: %v\n", hostPath, err)
+			}
 		}
 	}
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -453,6 +454,112 @@ func TestAppendMissingDefaultCopyRules_AppendsMissingDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreate_DefaultTemplateField(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Create config with defaultTemplate set
+	cfg := Config{
+		SelectedImage: "discourse",
+		Images: map[string]ImageConfig{
+			"discourse": {
+				Kind:    "discourse",
+				Tag:     "test",
+				Workdir: "/var/www/discourse",
+			},
+		},
+		ContainerImages: map[string]string{},
+		CustomWorkdirs:  map[string]string{},
+		DefaultTemplate: "/path/to/template.yaml",
+	}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load config and verify DefaultTemplate persisted
+	loaded, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if loaded.DefaultTemplate != "/path/to/template.yaml" {
+		t.Fatalf("expected DefaultTemplate '/path/to/template.yaml', got %q", loaded.DefaultTemplate)
+	}
+}
+
+func TestSave_DefaultTemplateOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	cfg := Config{
+		SelectedImage: "discourse",
+		Images: map[string]ImageConfig{
+			"discourse": {
+				Kind:    "discourse",
+				Tag:     "test",
+				Workdir: "/var/www/discourse",
+			},
+		},
+		ContainerImages: map[string]string{},
+		CustomWorkdirs:  map[string]string{},
+		DefaultTemplate: "", // Explicitly set to empty
+	}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read raw JSON and verify defaultTemplate is not present
+	data, err := os.ReadFile(Path(tmpDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bytes.Contains(data, []byte("defaultTemplate")) {
+		t.Fatal("expected defaultTemplate to be omitted from JSON when empty")
+	}
+}
+
+func TestSave_DefaultTemplateIncludedWhenSet(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	cfg := Config{
+		SelectedImage: "discourse",
+		Images: map[string]ImageConfig{
+			"discourse": {
+				Kind:    "discourse",
+				Tag:     "test",
+				Workdir: "/var/www/discourse",
+			},
+		},
+		ContainerImages: map[string]string{},
+		CustomWorkdirs:  map[string]string{},
+		DefaultTemplate: "templates/my-template.yaml",
+	}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read raw JSON and verify defaultTemplate is present
+	data, err := os.ReadFile(Path(tmpDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(data, []byte("defaultTemplate")) {
+		t.Fatal("expected defaultTemplate to be included in JSON when set")
+	}
+	if !bytes.Contains(data, []byte("templates/my-template.yaml")) {
+		t.Fatal("expected defaultTemplate value to be in JSON")
+	}
+}
+
 func TestPath(t *testing.T) {
 	t.Parallel()
 
@@ -486,5 +593,8 @@ func TestDefault(t *testing.T) {
 	}
 	if len(cfg.CopyRules) == 0 {
 		t.Fatal("expected default CopyRules")
+	}
+	if cfg.DefaultTemplate != "" {
+		t.Fatalf("expected DefaultTemplate to be empty, got %q", cfg.DefaultTemplate)
 	}
 }

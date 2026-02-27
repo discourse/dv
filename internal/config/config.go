@@ -28,6 +28,7 @@ type Config struct {
 	DiscourseRepo       string   `json:"discourseRepo"`
 	ExtractBranchPrefix string   `json:"extractBranchPrefix"`
 	ServeToken          string   `json:"serveToken,omitempty"`
+	DefaultTemplate     string   `json:"defaultTemplate,omitempty"`
 
 	// New image model (supersedes legacy fields above)
 	// SelectedImage is the name of the currently selected image (must always be set)
@@ -114,6 +115,7 @@ func Default() Config {
 		},
 		DiscourseRepo:       "https://github.com/discourse/discourse.git",
 		ExtractBranchPrefix: "agent-changes",
+		DefaultTemplate:     "",
 		// New image model defaults
 		SelectedImage: "discourse",
 		Images: map[string]ImageConfig{
