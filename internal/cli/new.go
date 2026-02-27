@@ -367,6 +367,25 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 		}
 	}
 
+	// 4.5. Copy configured files (credentials, etc.) into the container according to template rules
+	// This happens after plugins are cloned but before bundle/migrate
+	// so that any copied credentials are available for subsequent operations
+	for _, rule := range tpl.Copy {
+		// Expand host path to handle ~, env vars, and relative paths
+		expandedHostPaths := expandHostSources(rule.Host)
+		if len(expandedHostPaths) == 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: no files found matching %s\n", rule.Host)
+			continue
+		}
+
+		for _, hostPath := range expandedHostPaths {
+			fmt.Fprintf(cmd.OutOrStdout(), "Copying %s to %s...\n", hostPath, rule.Container)
+			if err := copyHostToContainer(hostPath, rule.Container, name, verbose); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to copy %s: %v\n", hostPath, err)
+			}
+		}
+	}
+
 	// 5. Maintenance (Bundle and Migrate)
 	// Now that core is foundation-ed and plugins are cloned, we bundle and migrate.
 	if err := runMaintenance(cmd, name, workdir, envList); err != nil {
