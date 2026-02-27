@@ -33,6 +33,12 @@ var newCmd = &cobra.Command{
 		}
 
 		templatePath, _ := cmd.Flags().GetString("template")
+
+		// Fall back to config default if flag not provided
+		if templatePath == "" && cfg.DefaultTemplate != "" {
+			templatePath = cfg.DefaultTemplate
+		}
+
 		var tpl *templateConfig
 		if templatePath != "" {
 			var data []byte
@@ -165,7 +171,11 @@ var newCmd = &cobra.Command{
 		if err = config.Save(configDir, cfg); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Creating agent '%s' from image '%s'...\n", name, imageTag)
+		if templatePath != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Creating agent '%s' from image '%s' (using template: %s)...\n", name, imageTag, templatePath)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Creating agent '%s' from image '%s'...\n", name, imageTag)
+		}
 		// initialize container by running a no-op command
 		var templateEnvs map[string]string
 		if tpl != nil {

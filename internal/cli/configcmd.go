@@ -24,7 +24,7 @@ var configGetCmd = &cobra.Command{
 	ValidArgs: []string{
 		"imageTag", "defaultContainerName", "workdir", "customWorkdir",
 		"hostStartingPort", "containerPort", "selectedAgent", "discourseRepo",
-		"extractBranchPrefix",
+		"extractBranchPrefix", "defaultTemplate",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -52,7 +52,7 @@ var configSetCmd = &cobra.Command{
 	ValidArgs: []string{
 		"imageTag", "defaultContainerName", "workdir", "customWorkdir",
 		"hostStartingPort", "containerPort", "selectedAgent", "discourseRepo",
-		"extractBranchPrefix",
+		"extractBranchPrefix", "defaultTemplate",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -184,6 +184,8 @@ func getConfigField(cfg config.Config, key string) (string, error) {
 		return cfg.DiscourseRepo, nil
 	case "extractBranchPrefix":
 		return cfg.ExtractBranchPrefix, nil
+	case "defaultTemplate":
+		return cfg.DefaultTemplate, nil
 	default:
 		return "", fmt.Errorf("unknown key: %s", key)
 	}
@@ -219,6 +221,8 @@ func setConfigField(cfg *config.Config, key, val string) error {
 		cfg.DiscourseRepo = val
 	case "extractBranchPrefix":
 		cfg.ExtractBranchPrefix = val
+	case "defaultTemplate":
+		cfg.DefaultTemplate = val
 	default:
 		return fmt.Errorf("unknown key: %s", key)
 	}

@@ -279,6 +279,8 @@ dv new my-feature --template ./templates/stable.yaml
 dv new my-feature --template https://raw.githubusercontent.com/discourse/dv/main/templates/full.yaml
 ```
 
+A default template can also be set via `dv config defaultTemplate [PATH]`, which will use the provided template at the path if `dv new` is ran without an explicit `--template` flag.
+
 Templates support:
 - **Discourse Configuration**: Specify branches, PRs, or custom repos.
 - **Plugins & Themes**: Automatically clone plugins and install/watch themes.
@@ -445,6 +447,9 @@ Use `dv config ai` to launch a TUI for configuring Discourse AI LLM providers (O
 
 #### AI Tool Workspace
 Use `dv config ai-tool [NAME]` to scaffold a directory under `/home/discourse/ai-tools` for developing custom Discourse AI tools. It includes `tool.yml` (metadata), `script.js` (logic), and `bin/test` / `bin/sync` helpers.
+
+#### Default Template
+Use `dv config defaultTemplate [PATH]` to set default template to be used when `dv new` is ran without a `--template` flag. See [templates/full.yaml](./templates/full.yaml) for a complete example of all available features for templates.
 
 #### Theme bootstrap
 Use `dv config theme [REPO]` to prepare a theme workspace inside the running container. Running it with no arguments prompts for a name **and** whether you’re building a full theme or component, installs the `discourse_theme` gem, scaffolds a minimal theme under `/home/discourse/<name>`, writes an `AGENTS.md` brief for AI tools, and updates the workdir override so `dv enter` drops you there. Supplying a git URL or `owner/repo` slug clones the existing theme instead of generating a skeleton, while still installing the gem, writing `AGENTS.md`, and configuring the watcher. Each workspace also receives a `theme-watch-<slug>` runit service that runs `discourse_theme watch` with an API key that’s automatically bound to the first admin user; restart it anytime with `sv restart theme-watch-<slug>` inside the container. Pass `--theme-name` (and optionally `--kind theme|component`) to skip the interactive prompts, and `--verbose` if you want to see every helper command that runs (handy when debugging API key or watcher issues).
