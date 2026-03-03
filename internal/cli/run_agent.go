@@ -248,9 +248,12 @@ func collectPromptInteractive(cmd *cobra.Command) (string, error) {
 
 func buildAgentEnv(cfg config.Config, agent string, cmd *cobra.Command) docker.Envs {
 	if agent == "ccr" {
-		envs := make(docker.Envs, 0, 3)
+		envs := make(docker.Envs, 0, 4)
 		if _, ok := os.LookupEnv("TERM"); ok {
 			envs = append(envs, "TERM")
+		}
+		if _, ok := os.LookupEnv("COLORTERM"); ok {
+			envs = append(envs, "COLORTERM")
 		}
 		if _, ok := os.LookupEnv("OPENROUTER_API_KEY"); ok {
 			envs = append(envs, "OPENROUTER_API_KEY")
@@ -267,6 +270,14 @@ func buildAgentEnv(cfg config.Config, agent string, cmd *cobra.Command) docker.E
 
 	if rule, ok := agentRules[agent]; ok {
 		envs = append(envs, rule.env...)
+	}
+
+	// Pass through terminal capability variables for proper color support
+	if _, ok := os.LookupEnv("TERM"); ok {
+		envs = append(envs, "TERM")
+	}
+	if _, ok := os.LookupEnv("COLORTERM"); ok {
+		envs = append(envs, "COLORTERM")
 	}
 
 	// Ensure a sane runtime environment for discourse user
