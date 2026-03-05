@@ -248,7 +248,7 @@ func TestAgentNameSlug(t *testing.T) {
 		{
 			name:     "allowed special chars",
 			input:    "my-agent_v1.0",
-			expected: "my-agent_v1.0",
+			expected: "my-agent-v1.0",
 		},
 		{
 			name:     "spaces become dashes",
@@ -296,9 +296,9 @@ func TestAgentNameSlug(t *testing.T) {
 			expected: "",
 		},
 		{
-			name:     "preserves dots underscores dashes",
+			name:     "replaces underscores with dashes and preserves dots",
 			input:    "my.agent_v1-beta",
-			expected: "my.agent_v1-beta",
+			expected: "my.agent-v1-beta",
 		},
 	}
 
@@ -308,6 +308,50 @@ func TestAgentNameSlug(t *testing.T) {
 			got := agentNameSlug(tt.input)
 			if got != tt.expected {
 				t.Errorf("agentNameSlug(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsRailsHostnameSafe(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{
+			name:     "letters numbers dashes dots are allowed",
+			input:    "agent-1.example",
+			expected: true,
+		},
+		{
+			name:     "uppercase letters are allowed",
+			input:    "Agent-1.Example",
+			expected: true,
+		},
+		{
+			name:     "underscores are rejected",
+			input:    "some_thing",
+			expected: false,
+		},
+		{
+			name:     "spaces are rejected",
+			input:    "some thing",
+			expected: false,
+		},
+		{
+			name:     "empty is rejected",
+			input:    "   ",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := isRailsHostnameSafe(tt.input)
+			if got != tt.expected {
+				t.Errorf("isRailsHostnameSafe(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}

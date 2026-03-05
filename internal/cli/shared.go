@@ -237,9 +237,12 @@ func agentNameSlug(name string) string {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
 			builder.WriteRune(r)
 			lastDash = false
-		case r == '-' || r == '_' || r == '.':
+		case r == '.':
 			builder.WriteRune(r)
 			lastDash = false
+		case r == '-' || r == '_':
+			builder.WriteRune('-')
+			lastDash = true
 		default:
 			if !lastDash {
 				builder.WriteRune('-')
@@ -251,7 +254,23 @@ func agentNameSlug(name string) string {
 }
 
 func autogenName() string {
-	return fmt.Sprintf("ai_agent_%s", time.Now().Format("20060102-150405"))
+	return fmt.Sprintf("ai-agent-%s", time.Now().Format("20060102-150405"))
+}
+
+func isRailsHostnameSafe(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func runShell(script string) (string, error) {

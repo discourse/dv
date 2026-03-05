@@ -81,6 +81,7 @@ var newCmd = &cobra.Command{
 		imageOverride, _ := cmd.Flags().GetString("image")
 
 		name := ""
+		explicitName := len(args) == 1
 		if len(args) == 1 {
 			name = args[0]
 		} else if prFlag > 0 {
@@ -92,6 +93,16 @@ var newCmd = &cobra.Command{
 		}
 		if name == "" {
 			name = autogenName()
+		}
+		if explicitName {
+			proceed, err := confirmInvalidRailsHostname(cmd, name)
+			if err != nil {
+				return err
+			}
+			if !proceed {
+				fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
+				return nil
+			}
 		}
 		if docker.Exists(name) {
 			return fmt.Errorf("an agent named '%s' already exists", name)
@@ -215,6 +226,16 @@ var newCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "Agent '%s' is ready and selected.\n", name)
 		return nil
 	},
+}
+
+func confirmInvalidRailsHostname(cmd *cobra.Command, name string) (bool, error) {
+	if isRailsHostnameSafe(name) {
+		return true, nil
+	}
+	errOut := cmd.ErrOrStderr()
+	fmt.Fprintf(errOut, "Warning: agent name %q is not Rails hostname-safe.\n", name)
+	fmt.Fprintln(errOut, "Rails host names should contain only numbers, letters, dashes, and dots.")
+	return promptYesNo(cmd.InOrStdin(), errOut, "Continue anyway? (y/N): ")
 }
 
 func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prNumber int, envs docker.Envs) error {
