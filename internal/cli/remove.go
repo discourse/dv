@@ -47,7 +47,7 @@ var removeCmd = &cobra.Command{
 		imgForContainer := cfg.ContainerImages[name]
 		var proxyHost string
 		if cfg.LocalProxy.Enabled {
-			if labels, err := docker.Labels(name); err == nil {
+			if labels, err := labelsWithOverrides(name, cfg); err == nil {
 				if host, _, _, _, ok := localproxy.RouteFromLabels(labels); ok {
 					proxyHost = host
 				}
@@ -84,6 +84,12 @@ var removeCmd = &cobra.Command{
 		if cfg.ContainerImages != nil {
 			if _, ok := cfg.ContainerImages[name]; ok {
 				delete(cfg.ContainerImages, name)
+				dirty = true
+			}
+		}
+		if cfg.LabelOverrides != nil {
+			if _, ok := cfg.LabelOverrides[name]; ok {
+				delete(cfg.LabelOverrides, name)
 				dirty = true
 			}
 		}

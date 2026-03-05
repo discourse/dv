@@ -738,20 +738,6 @@ func Labels(name string) (map[string]string, error) {
 	return labels, nil
 }
 
-func UpdateLabels(name string, labels map[string]string) error {
-	if len(labels) == 0 {
-		return nil
-	}
-	args := []string{"update"}
-	for k, v := range labels {
-		args = append(args, "--label-add", fmt.Sprintf("%s=%s", k, v))
-	}
-	args = append(args, name)
-	cmd := exec.Command("docker", args...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
-}
-
 // GetContainerHostPort returns the host port mapped to the given container port.
 // Returns 0 if no mapping found or container doesn't exist.
 // Works on both running and stopped containers by inspecting HostConfig.

@@ -47,7 +47,7 @@ var renameCmd = &cobra.Command{
 		var proxyHost string
 		var containerPort int
 		if cfg.LocalProxy.Enabled {
-			if labels, err := docker.Labels(oldName); err == nil {
+			if labels, err := labelsWithOverrides(oldName, cfg); err == nil {
 				if host, _, cp, _, ok := localproxy.RouteFromLabels(labels); ok {
 					proxyHost = host
 					containerPort = cp
@@ -76,16 +76,34 @@ var renameCmd = &cobra.Command{
 				cfg.CustomWorkdirs[newName] = w
 			}
 		}
+		// Migrate label overrides from old name to new name
+		if cfg.LabelOverrides != nil {
+			if ov, ok := cfg.LabelOverrides[oldName]; ok {
+				delete(cfg.LabelOverrides, oldName)
+				cfg.LabelOverrides[newName] = ov
+			}
+		}
+
+		var newHost string
+		if proxyHost != "" {
+			newHost = localproxy.HostnameForContainer(newName, cfg.LocalProxy.Hostname)
+			// Store updated hostname as a label override since docker rename
+			// doesn't update labels.
+			if cfg.LabelOverrides == nil {
+				cfg.LabelOverrides = map[string]map[string]string{}
+			}
+			if cfg.LabelOverrides[newName] == nil {
+				cfg.LabelOverrides[newName] = map[string]string{}
+			}
+			cfg.LabelOverrides[newName][localproxy.LabelHost] = newHost
+		}
+
 		if err := config.Save(configDir, cfg); err != nil {
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Renamed agent '%s' -> '%s'\n", oldName, newName)
 
 		if proxyHost != "" {
-			newHost := localproxy.HostnameForContainer(newName, cfg.LocalProxy.Hostname)
-			_ = docker.UpdateLabels(newName, map[string]string{
-				localproxy.LabelHost: newHost,
-			})
 
 			// Update /etc/hosts inside the container if it's running
 			if docker.Running(newName) {

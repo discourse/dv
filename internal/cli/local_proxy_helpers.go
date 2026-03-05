@@ -78,7 +78,7 @@ func registerContainerFromLabels(cmd *cobra.Command, cfg config.Config, name str
 	if !cfg.LocalProxy.Enabled {
 		return
 	}
-	labels, err := docker.Labels(name)
+	labels, err := labelsWithOverrides(name, cfg)
 	if err != nil {
 		return
 	}

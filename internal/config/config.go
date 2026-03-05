@@ -20,15 +20,15 @@ type Config struct {
 	CustomWorkdirs   map[string]string `json:"customWorkdirs,omitempty"`
 	LocalProxy       LocalProxyConfig  `json:"localProxy,omitempty"`
 	// HostStartingPort is the first port to try on the host.
-	HostStartingPort    int      `json:"hostStartingPort"`
-	ContainerPort       int      `json:"containerPort"`
-	SelectedAgent       string   `json:"selectedAgent"`
+	HostStartingPort    int               `json:"hostStartingPort"`
+	ContainerPort       int               `json:"containerPort"`
+	SelectedAgent       string            `json:"selectedAgent"`
 	EnvPassthrough      []string          `json:"envPassthrough"`
 	Env                 map[string]string `json:"env,omitempty"`
-	DiscourseRepo       string   `json:"discourseRepo"`
-	ExtractBranchPrefix string   `json:"extractBranchPrefix"`
-	ServeToken          string   `json:"serveToken,omitempty"`
-	DefaultTemplate     string   `json:"defaultTemplate,omitempty"`
+	DiscourseRepo       string            `json:"discourseRepo"`
+	ExtractBranchPrefix string            `json:"extractBranchPrefix"`
+	ServeToken          string            `json:"serveToken,omitempty"`
+	DefaultTemplate     string            `json:"defaultTemplate,omitempty"`
 
 	// New image model (supersedes legacy fields above)
 	// SelectedImage is the name of the currently selected image (must always be set)
@@ -37,6 +37,10 @@ type Config struct {
 	Images map[string]ImageConfig `json:"images"`
 	// ContainerImages maps container name -> image name for provenance
 	ContainerImages map[string]string `json:"containerImages"`
+
+	// LabelOverrides stores container label overrides keyed by container name.
+	// Used when Docker labels can't be updated in-place (e.g. after rename).
+	LabelOverrides map[string]map[string]string `json:"labelOverrides,omitempty"`
 
 	// CopyFiles maps host source paths to container destination paths that
 	// should be copied into the container at `dv enter` time. Host paths may

@@ -67,6 +67,15 @@ var startCmd = &cobra.Command{
 			_ = docker.Remove(name)
 		}
 
+		overridesDirty := false
+		if reset || !docker.Exists(name) {
+			// Clear label overrides — fresh container gets correct labels
+			if _, ok := cfg.LabelOverrides[name]; ok {
+				delete(cfg.LabelOverrides, name)
+				overridesDirty = true
+			}
+		}
+
 		if !docker.Exists(name) {
 			// Find the first available host port, starting from hostPort
 			allocated, err := docker.AllocatedPorts()
@@ -136,7 +145,7 @@ var startCmd = &cobra.Command{
 					fmt.Fprintf(cmd.OutOrStdout(), "Port %d in use, remapping to %d...\n", existingPort, newPort)
 
 					// Get container metadata for recreation
-					labels, _ := docker.Labels(name)
+					labels, _ := labelsWithOverrides(name, cfg)
 					existingWorkdir, _ := docker.GetContainerWorkdir(name)
 					if existingWorkdir == "" {
 						existingWorkdir = workdir
@@ -207,6 +216,9 @@ var startCmd = &cobra.Command{
 		}
 		if cfg.ContainerImages[name] != imgName {
 			cfg.ContainerImages[name] = imgName
+			overridesDirty = true
+		}
+		if overridesDirty {
 			_ = config.Save(configDir, cfg)
 		}
 

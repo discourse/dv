@@ -1201,6 +1201,9 @@ func listContainers(cfg config.Config, includeSessions bool) ([]map[string]inter
 			createdAt = parseDockerTime(parts[5])
 		}
 		labelMap := parseLabels(labelsField)
+		for k, v := range cfg.LabelOverrides[name] {
+			labelMap[k] = v
+		}
 		belongs := false
 		if imgNameFromCfg, ok := cfg.ContainerImages[name]; ok && imgNameFromCfg == imgName {
 			belongs = true

@@ -58,6 +58,9 @@ var listCmd = &cobra.Command{
 				labelsField = parts[4]
 			}
 			labelMap := parseLabels(labelsField)
+			for k, v := range cfg.LabelOverrides[name] {
+				labelMap[k] = v
+			}
 			createdAt := time.Time{}
 			if len(parts) >= 6 {
 				createdAt = parseDockerTime(parts[5])
