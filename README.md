@@ -520,6 +520,9 @@ Automatically passed through when set on the host:
 - `GH_TOKEN`
 - `OPENROUTER_API_KEY`
 - `FACTORY_API_KEY`
+- `ANTHROPIC_DEFAULT_SONNET_MODEL`
+- `ANTHROPIC_DEFAULT_OPUS_MODEL`
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL`
 
 ### Build acceleration toggles
 

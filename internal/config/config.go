@@ -116,6 +116,8 @@ func Default() Config {
 			"CLAUDE_CODE_USE_BEDROCK", "DEEPSEEK_API_KEY", "GEMINI_API_KEY",
 			"AMP_API_KEY", "GH_TOKEN", "OPENROUTER_API_KEY",
 			"FACTORY_API_KEY", "MISTRAL_API_KEY",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL",
 		},
 		DiscourseRepo:       "https://github.com/discourse/discourse.git",
 		ExtractBranchPrefix: "agent-changes",
