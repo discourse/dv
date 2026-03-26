@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func TLSPaths(configDir string) (certPath string, keyPath string) {
@@ -12,7 +13,11 @@ func TLSPaths(configDir string) (certPath string, keyPath string) {
 	return filepath.Join(tlsDir, "localhost.pem"), filepath.Join(tlsDir, "localhost-key.pem")
 }
 
-func EnsureMKCertTLS(configDir string) error {
+func tlsHostnamePath(configDir string) string {
+	return filepath.Join(configDir, "local-proxy", "tls", "hostname")
+}
+
+func EnsureMKCertTLS(configDir string, hostnameSuffix string) error {
 	if _, err := exec.LookPath("mkcert"); err != nil {
 		return fmt.Errorf("mkcert not found in PATH (required for --https): %w", err)
 	}
@@ -28,13 +33,25 @@ func EnsureMKCertTLS(configDir string) error {
 		return fmt.Errorf("mkcert -install failed: %w", err)
 	}
 
+	hostFile := tlsHostnamePath(configDir)
 	certOK := fileNonEmpty(certPath)
 	keyOK := fileNonEmpty(keyPath)
 	if certOK && keyOK {
-		return nil
+		if prev, err := os.ReadFile(hostFile); err == nil && strings.TrimSpace(string(prev)) == hostnameSuffix {
+			return nil
+		}
+		// Hostname changed or tracking file missing — regenerate.
+		os.Remove(certPath)
+		os.Remove(keyPath)
 	}
 
-	gen := exec.Command("mkcert", "-cert-file", certPath, "-key-file", keyPath, "localhost", "*.dv.localhost")
+	sans := []string{"localhost", "*.dv.localhost"}
+	if hostnameSuffix != "" && hostnameSuffix != "dv.localhost" {
+		sans = append(sans, "*."+hostnameSuffix)
+	}
+
+	args := append([]string{"-cert-file", certPath, "-key-file", keyPath}, sans...)
+	gen := exec.Command("mkcert", args...)
 	gen.Stdout, gen.Stderr = os.Stdout, os.Stderr
 	if err := gen.Run(); err != nil {
 		return fmt.Errorf("mkcert failed: %w", err)
@@ -43,6 +60,8 @@ func EnsureMKCertTLS(configDir string) error {
 	if !fileNonEmpty(certPath) || !fileNonEmpty(keyPath) {
 		return fmt.Errorf("mkcert did not produce expected cert/key at %s and %s", certPath, keyPath)
 	}
+
+	os.WriteFile(hostFile, []byte(hostnameSuffix), 0o644)
 	return nil
 }
 

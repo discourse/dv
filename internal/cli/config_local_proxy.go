@@ -134,7 +134,7 @@ var configLocalProxyCmd = &cobra.Command{
 		}
 
 		if lp.HTTPS {
-			if err := localproxy.EnsureMKCertTLS(configDir); err != nil {
+			if err := localproxy.EnsureMKCertTLS(configDir, lp.Hostname); err != nil {
 				return err
 			}
 		}
