@@ -16,7 +16,7 @@ func TestBuildCatchupScript_CoreOnly(t *testing.T) {
 	}
 
 	// Should stop and restart services
-	if !strings.Contains(script, "force-stop unicorn") {
+	if !strings.Contains(script, "force-stop pitchfork") {
 		t.Error("missing service stop")
 	}
 	if !strings.Contains(script, "trap cleanup EXIT") {

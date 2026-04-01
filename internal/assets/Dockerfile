@@ -112,34 +112,34 @@ RUN /sbin/boot & \
 
 RUN sudo -H -u discourse /bin/bash -lc "cd /var/www/discourse && npx playwright install-deps && npx playwright install"
 
-RUN mkdir -p /etc/service/unicorn && \
-    tee /etc/service/unicorn/run > /dev/null <<'EOF'
+RUN mkdir -p /etc/service/pitchfork && \
+    tee /etc/service/pitchfork/run > /dev/null <<'EOF'
 #!/bin/bash
 
 cd /var/www/discourse
-HOME=/home/discourse USER=discourse exec chpst -u discourse:discourse -U discourse:discourse bin/unicorn >> /var/www/discourse/log/unicorn.log 2>&1
+HOME=/home/discourse USER=discourse exec chpst -u discourse:discourse -U discourse:discourse bin/pitchfork >> /var/www/discourse/log/unicorn.log 2>&1
 EOF
-RUN chmod +x /etc/service/unicorn/run
-RUN tee /etc/service/unicorn/finish > /dev/null <<'EOF'
+RUN chmod +x /etc/service/pitchfork/run
+RUN tee /etc/service/pitchfork/finish > /dev/null <<'EOF'
 #!/bin/bash
 pkill -f "unicorn master" || true
 pkill -f "unicorn worker" || true
 EOF
-RUN chmod +x /etc/service/unicorn/finish
+RUN chmod +x /etc/service/pitchfork/finish
 
 RUN mkdir -p /etc/runit/3.d && \
-    tee /etc/runit/3.d/03-unicorn > /dev/null <<'EOF'
+    tee /etc/runit/3.d/03-pitchfork > /dev/null <<'EOF'
 #!/bin/bash
-sv stop unicorn
+sv stop pitchfork
 EOF
-RUN chmod +x /etc/runit/3.d/03-unicorn
+RUN chmod +x /etc/runit/3.d/03-pitchfork
 
 RUN mkdir -p /etc/service/ember-cli && \
     tee /etc/service/ember-cli/run > /dev/null <<'EOF'
 #!/bin/bash
 
 cd /var/www/discourse
-HOME=/home/discourse UNICORN_PORT=9292 USER=discourse exec chpst -u discourse:discourse -U discourse:discourse bin/ember-cli >> /var/www/discourse/log/ember-cli.log 2>&1
+HOME=/home/discourse UNICORN_PORT=9292 PITCHFORK_PORT=9292 USER=discourse exec chpst -u discourse:discourse -U discourse:discourse bin/ember-cli >> /var/www/discourse/log/ember-cli.log 2>&1
 EOF
 RUN chmod +x /etc/service/ember-cli/run
 RUN tee /etc/service/ember-cli/finish > /dev/null <<'EOF'
@@ -199,5 +199,6 @@ ENV DISCOURSE_DISABLE_BROWSER_SANDBOX=1
 ENV TESTEM_DEFAULT_BROWSER=Chromium 
 ENV CHROME_BIN=/usr/bin/chromium
 ENV UNICORN_PORT=9292
+ENV PITCHFORK_PORT=9292
 
 ENTRYPOINT ["/sbin/boot"]

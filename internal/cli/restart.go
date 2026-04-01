@@ -12,7 +12,7 @@ import (
 
 var restartCmd = &cobra.Command{
 	Use:   "restart [name]",
-	Short: "Restart the container or internal discourse services (unicorn, ember-cli, etc.)",
+	Short: "Restart the container or internal discourse services (pitchfork, ember-cli, etc.)",
 	Args:  cobra.MaximumNArgs(1),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		// Complete container name for the first positional argument

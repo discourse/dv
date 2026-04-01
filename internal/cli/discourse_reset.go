@@ -33,9 +33,9 @@ func buildPostCheckoutCommands() []string {
 // Only migrations and later steps run.
 func buildDatabaseDropCreateMigrateCommands(opts discourseResetScriptOpts) []string {
 	cmds := []string{
-		"echo 'Stopping services (as root): unicorn and ember-cli'",
+		"echo 'Stopping services (as root): pitchfork and ember-cli'",
 		"sudo -n true 2>/dev/null || true",
-		"sudo /usr/bin/sv force-stop unicorn || sudo sv force-stop unicorn || true",
+		"sudo /usr/bin/sv force-stop pitchfork || sudo sv force-stop pitchfork || true",
 		"sudo /usr/bin/sv force-stop ember-cli || sudo sv force-stop ember-cli || true",
 		"echo 'Waiting for PostgreSQL to be ready...'",
 		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo 'PostgreSQL did not become ready'; exit 1)",
@@ -88,7 +88,7 @@ type discourseResetScriptOpts struct {
 
 // buildDiscourseResetScript generates a shell script that performs common
 // Discourse development environment reset tasks:
-// - Stops services (unicorn, ember-cli)
+// - Stops services (pitchfork, ember-cli)
 // - Cleans working tree
 // - Ensures full git history
 // - Executes custom checkout commands
@@ -102,7 +102,7 @@ type discourseResetScriptOpts struct {
 func buildDiscourseResetScript(checkoutCmds []string, opts discourseResetScriptOpts) string {
 	lines := []string{
 		"set -euo pipefail",
-		"cleanup() { echo 'Starting services (as root): unicorn and ember-cli'; sudo /usr/bin/sv start unicorn || sudo sv start unicorn || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
+		"cleanup() { echo 'Starting services (as root): pitchfork and ember-cli'; sudo /usr/bin/sv start pitchfork || sudo sv start pitchfork || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
 		"trap cleanup EXIT",
 	}
 
@@ -201,14 +201,14 @@ func buildCurrentBranchResetCommands() []string {
 
 // buildDiscourseDatabaseResetScript generates a shell script that performs
 // database reset only (no git operations):
-// - Stops services (unicorn, ember-cli)
+// - Stops services (pitchfork, ember-cli)
 // - Resets and migrates databases
 // - Seeds users
 // - Restarts services on exit
 func buildDiscourseDatabaseResetScript() string {
 	lines := []string{
 		"set -euo pipefail",
-		"cleanup() { echo 'Starting services (as root): unicorn and ember-cli'; sudo /usr/bin/sv start unicorn || sudo sv start unicorn || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
+		"cleanup() { echo 'Starting services (as root): pitchfork and ember-cli'; sudo /usr/bin/sv start pitchfork || sudo sv start pitchfork || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
 		"trap cleanup EXIT",
 	}
 

@@ -59,7 +59,7 @@ var restartDiscourseCmd = &cobra.Command{
 		stopScript := `set -e
 has_service() { [ -d "/etc/service/$1" ]; }
 if has_service sidekiq; then sv force-stop sidekiq || true; fi
-if has_service unicorn; then sv force-stop unicorn || true; fi
+if has_service pitchfork; then sv force-stop pitchfork || true; fi
 if has_service ember-cli; then sv force-stop ember-cli || true; fi
 if has_service caddy; then sv force-stop caddy || true; fi
 sleep 1`
@@ -70,7 +70,7 @@ sleep 1`
 		startScript := `set -e
 has_service() { [ -d "/etc/service/$1" ]; }
 if has_service sidekiq; then sv start sidekiq || true; fi
-if has_service unicorn; then sv start unicorn || true; fi
+if has_service pitchfork; then sv start pitchfork || true; fi
 if has_service ember-cli; then sv start ember-cli || true; fi
 if has_service caddy; then sv start caddy || true; fi
 sleep 1`
@@ -80,7 +80,7 @@ sleep 1`
 		fmt.Fprintf(cmd.OutOrStdout(), "Service status:\n")
 		statusScript := `set -e
 services=()
-for s in sidekiq unicorn ember-cli caddy; do
+for s in sidekiq pitchfork ember-cli caddy; do
   [ -d "/etc/service/$s" ] && services+=("$s")
 done
 if [ ${#services[@]} -gt 0 ]; then

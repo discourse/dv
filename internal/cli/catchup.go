@@ -108,10 +108,10 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 func buildCatchupScript(workdir string, plugins []string) string {
 	lines := []string{
 		"set -euo pipefail",
-		"cleanup() { echo 'Restarting services: unicorn and ember-cli'; sudo /usr/bin/sv start unicorn || sudo sv start unicorn || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
+		"cleanup() { echo 'Restarting services: pitchfork and ember-cli'; sudo /usr/bin/sv start pitchfork || sudo sv start pitchfork || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
 		"trap cleanup EXIT",
 		"",
-		"sudo /usr/bin/sv force-stop unicorn || sudo sv force-stop unicorn || true",
+		"sudo /usr/bin/sv force-stop pitchfork || sudo sv force-stop pitchfork || true",
 		"sudo /usr/bin/sv force-stop ember-cli || sudo sv force-stop ember-cli || true",
 		"",
 		"echo '==> Resetting core...'",

@@ -341,7 +341,7 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 
 	// 2. Maintenance Mode: Stop Services
 	fmt.Fprintf(cmd.OutOrStdout(), "Stopping services for provisioning...\n")
-	stopScript := "sudo /usr/bin/sv force-stop unicorn ember-cli || true"
+	stopScript := "sudo /usr/bin/sv force-stop pitchfork ember-cli || true"
 	if _, err := docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", stopScript}); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to stop services: %v\n", err)
 	}
@@ -349,7 +349,7 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 	// Ensure services are restarted even if something fails
 	defer func() {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting services (cleanup)...\n")
-		startScript := "sudo /usr/bin/sv start unicorn ember-cli || true"
+		startScript := "sudo /usr/bin/sv start pitchfork ember-cli || true"
 		_, _ = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", startScript})
 	}()
 
@@ -415,7 +415,7 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 
 	// 6. Start Services and Wait for Health
 	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning complete. Starting Discourse and waiting for it to be ready...\n")
-	startScript := "sudo /usr/bin/sv start unicorn ember-cli || true"
+	startScript := "sudo /usr/bin/sv start pitchfork ember-cli || true"
 	if _, err = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", startScript}); err != nil {
 		return fmt.Errorf("failed to start services: %w", err)
 	}

@@ -143,7 +143,7 @@ dv stop [--name NAME]
 # Restart the container
 dv restart [--name NAME]
 
-# Restart only Discourse services (Unicorn/Sidekiq)
+# Restart only Discourse services (Pitchfork/Sidekiq)
 dv restart discourse [--name NAME]
 ```
 
@@ -549,7 +549,7 @@ Runit services log to the following locations inside the container:
 
 | Service    | Log Path                              |
 |------------|---------------------------------------|
-| unicorn    | `/var/www/discourse/log/unicorn.log`  |
+| pitchfork  | `/var/www/discourse/log/unicorn.log`  |
 | ember-cli  | `/var/www/discourse/log/ember-cli.log`|
 | caddy      | `/var/log/caddy.log`                  |
 | postgresql | `/var/log/postgres/current`           |

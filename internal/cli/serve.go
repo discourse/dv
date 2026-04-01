@@ -363,7 +363,7 @@ func handleContainer(w http.ResponseWriter, r *http.Request, configDir string, p
 		case "logs":
 			if len(parts) >= 4 {
 				switch parts[3] {
-				case "unicorn":
+				case "pitchfork":
 					handleContainerLogTail(w, r, name, "/var/www/discourse/log/unicorn.log")
 				case "ember":
 					handleContainerLogTail(w, r, name, "/var/www/discourse/log/ember-cli.log")
