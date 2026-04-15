@@ -75,6 +75,14 @@ func (g *gitSyncer) checkGitState() (gitSyncState, error) {
 
 // syncToContainer synchronizes git state from host to container
 func (g *gitSyncer) syncToContainer() error {
+	return g.syncToContainerWithMode(false)
+}
+
+func (g *gitSyncer) forceSyncToContainer() error {
+	return g.syncToContainerWithMode(true)
+}
+
+func (g *gitSyncer) syncToContainerWithMode(forceWorktree bool) error {
 	state, err := g.checkGitState()
 	if err != nil {
 		return err
@@ -82,7 +90,16 @@ func (g *gitSyncer) syncToContainer() error {
 
 	// Already in sync (exact SHA match)
 	if state.hostHead == state.containerHead && state.hostBranch == state.containerBranch {
-		g.debugf("git already in sync at %s (%s)", state.hostHead[:min(8, len(state.hostHead))], state.hostBranch)
+		if !forceWorktree {
+			g.debugf("git already in sync at %s (%s)", state.hostHead[:min(8, len(state.hostHead))], state.hostBranch)
+			return nil
+		}
+		out, err := g.containerGitOutput("reset", "--hard", "HEAD")
+		if err != nil {
+			return fmt.Errorf("git reset --hard HEAD: %s", out)
+		}
+		fmt.Fprintf(g.logOut, "git sync: container working tree reset to %s (%s)\n",
+			state.hostHead[:min(8, len(state.hostHead))], state.hostBranch)
 		return nil
 	}
 

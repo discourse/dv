@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net/url"
@@ -141,11 +140,11 @@ Use 'dv extract plugin <name>' or 'dv extract theme <name>' for tab completion.`
 			})
 		}
 		// Check for changes
-		status, err := docker.ExecOutput(name, work, nil, []string{"bash", "-lc", "git status --porcelain"})
+		status, err := docker.ExecOutput(name, work, nil, []string{"git", "status", "--porcelain", "-z", "--untracked-files=all"})
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(status) == "" {
+		if status == "" {
 			if syncMode {
 				status = ""
 			} else {
@@ -298,27 +297,8 @@ Use 'dv extract plugin <name>' or 'dv extract theme <name>' for tab completion.`
 		}
 
 		fmt.Fprintln(logOut, "Extracting changes from container...")
-		scanner := bufio.NewScanner(strings.NewReader(status))
-		changedCount := 0
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			changedCount++
-			status := line[:2]
-			path := strings.TrimSpace(line[3:])
-			absDst := filepath.Join(localRepo, path)
-			if status == "??" || strings.ContainsAny(status, "AM") {
-				_ = os.MkdirAll(filepath.Dir(absDst), 0o755)
-				if err := docker.CopyFromContainer(name, filepath.Join(work, path), absDst); err != nil {
-					fmt.Fprintf(logOut, "Warning: could not copy %s\n", path)
-				}
-			} else if strings.Contains(status, "D") {
-				_ = os.Remove(absDst)
-			}
-		}
-		if err := scanner.Err(); err != nil {
+		changedCount, err := applyExtractStatus(logOut, name, work, localRepo, status)
+		if err != nil {
 			return err
 		}
 

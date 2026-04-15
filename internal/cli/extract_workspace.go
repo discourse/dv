@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -57,11 +56,11 @@ func extractWorkspaceRepo(opts workspaceExtractOptions) error {
 		defer cleanup()
 	}
 
-	status, err := docker.ExecOutput(opts.containerName, opts.containerWorkdir, nil, []string{"bash", "-lc", "git status --porcelain"})
+	status, err := docker.ExecOutput(opts.containerName, opts.containerWorkdir, nil, []string{"git", "status", "--porcelain", "-z", "--untracked-files=all"})
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(status) == "" {
+	if status == "" {
 		if opts.syncMode {
 			status = ""
 		} else {
@@ -180,27 +179,8 @@ func extractWorkspaceRepo(opts workspaceExtractOptions) error {
 	}
 
 	fmt.Fprintf(logOut, "Extracting %s changes from container...\n", opts.displayName)
-	scanner := bufio.NewScanner(strings.NewReader(status))
-	changedCount := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		changedCount++
-		st := line[:2]
-		rel := strings.TrimSpace(line[3:])
-		absDst := filepath.Join(opts.localRepo, rel)
-		if st == "??" || strings.ContainsAny(st, "AM") {
-			_ = os.MkdirAll(filepath.Dir(absDst), 0o755)
-			if err := docker.CopyFromContainer(opts.containerName, filepath.Join(opts.containerWorkdir, rel), absDst); err != nil {
-				fmt.Fprintf(logOut, "Warning: could not copy %s\n", rel)
-			}
-		} else if strings.Contains(st, "D") {
-			_ = os.Remove(absDst)
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	changedCount, err := applyExtractStatus(logOut, opts.containerName, opts.containerWorkdir, opts.localRepo, status)
+	if err != nil {
 		return err
 	}
 

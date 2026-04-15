@@ -484,6 +484,233 @@ func TestFlushTimeoutWorks(t *testing.T) {
 	}
 }
 
+func TestPerformGitSyncPreservesHostChanges(t *testing.T) {
+	ctx := context.Background()
+
+	hostDir := t.TempDir()
+	if err := runInDir(hostDir, nil, nil, "git", "init"); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "config", "user.email", "test@test.com"); err != nil {
+		t.Fatalf("git config email failed: %v", err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "config", "user.name", "Test"); err != nil {
+		t.Fatalf("git config name failed: %v", err)
+	}
+	hostFile := filepath.Join(hostDir, "file.txt")
+	if err := os.WriteFile(hostFile, []byte("base"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "commit", "-m", "initial"); err != nil {
+		t.Fatal(err)
+	}
+
+	containerRoot := t.TempDir()
+	containerDir := filepath.Join(containerRoot, "container")
+	if err := runInDir("", nil, nil, "git", "clone", hostDir, containerDir); err != nil {
+		t.Fatalf("git clone failed: %v", err)
+	}
+	containerFile := filepath.Join(containerDir, "file.txt")
+
+	origExecOutput := dockerExecOutput
+	origExecAsRoot := dockerExecAsRoot
+	origCopyFrom := dockerCopyFromContainer
+	origCopyTo := dockerCopyToContainerWithOwnership
+	t.Cleanup(func() {
+		dockerExecOutput = origExecOutput
+		dockerExecAsRoot = origExecAsRoot
+		dockerCopyFromContainer = origCopyFrom
+		dockerCopyToContainerWithOwnership = origCopyTo
+	})
+
+	dockerExecOutput = func(ctx context.Context, _ string, workdir string, _ docker.Envs, argv []string) (string, error) {
+		if len(argv) == 0 {
+			return "", nil
+		}
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Dir = workdir
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	dockerExecAsRoot = func(ctx context.Context, _ string, workdir string, _ docker.Envs, argv []string) (string, error) {
+		if len(argv) == 0 {
+			return "", nil
+		}
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Dir = workdir
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	dockerCopyFromContainer = func(_ context.Context, _ string, srcInContainer, dstOnHost string) error {
+		return copyFile(srcInContainer, dstOnHost)
+	}
+	dockerCopyToContainerWithOwnership = func(_ context.Context, _ string, srcOnHost, dstInContainer string, _ bool) error {
+		return copyFileToDir(srcOnHost, dstInContainer)
+	}
+
+	if err := os.WriteFile(hostFile, []byte("host-dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logBuf bytes.Buffer
+	s := &extractSync{
+		ctx:           ctx,
+		containerName: "fake-container",
+		workdir:       containerDir,
+		localRepo:     hostDir,
+		logOut:        &logBuf,
+		errOut:        &logBuf,
+		events:        make(chan watcherEvent, 1),
+		retryQueue:    make(map[string]retryEntry),
+		fileSyncIdle:  make(chan struct{}),
+		gitSyncer:     fakeGitSyncer{},
+	}
+	close(s.fileSyncIdle)
+
+	if err := s.performGitSync(); err != nil {
+		t.Fatalf("performGitSync failed: %v", err)
+	}
+
+	containerOut, err := os.ReadFile(containerFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(containerOut) != "host-dirty" {
+		t.Fatalf("container file not updated from host dirty state, got %q", string(containerOut))
+	}
+}
+
+func TestPerformGitSyncHostResetPrefersHostState(t *testing.T) {
+	ctx := context.Background()
+
+	hostDir := t.TempDir()
+	if err := runInDir(hostDir, nil, nil, "git", "init"); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "config", "user.email", "test@test.com"); err != nil {
+		t.Fatalf("git config email failed: %v", err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "config", "user.name", "Test"); err != nil {
+		t.Fatalf("git config name failed: %v", err)
+	}
+	hostFile := filepath.Join(hostDir, "file.txt")
+	if err := os.WriteFile(hostFile, []byte("base"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInDir(hostDir, nil, nil, "git", "commit", "-m", "initial"); err != nil {
+		t.Fatal(err)
+	}
+
+	containerRoot := t.TempDir()
+	containerDir := filepath.Join(containerRoot, "container")
+	if err := runInDir("", nil, nil, "git", "clone", hostDir, containerDir); err != nil {
+		t.Fatalf("git clone failed: %v", err)
+	}
+	containerFile := filepath.Join(containerDir, "file.txt")
+	if err := os.WriteFile(containerFile, []byte("container-dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origExecOutput := dockerExecOutput
+	origExecAsRoot := dockerExecAsRoot
+	origCopyFrom := dockerCopyFromContainer
+	origCopyTo := dockerCopyToContainerWithOwnership
+	t.Cleanup(func() {
+		dockerExecOutput = origExecOutput
+		dockerExecAsRoot = origExecAsRoot
+		dockerCopyFromContainer = origCopyFrom
+		dockerCopyToContainerWithOwnership = origCopyTo
+	})
+
+	dockerExecOutput = func(ctx context.Context, _ string, workdir string, _ docker.Envs, argv []string) (string, error) {
+		if len(argv) == 0 {
+			return "", nil
+		}
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Dir = workdir
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	dockerExecAsRoot = func(ctx context.Context, _ string, workdir string, _ docker.Envs, argv []string) (string, error) {
+		if len(argv) == 0 {
+			return "", nil
+		}
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Dir = workdir
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	dockerCopyFromContainer = func(_ context.Context, _ string, srcInContainer, dstOnHost string) error {
+		return copyFile(srcInContainer, dstOnHost)
+	}
+	dockerCopyToContainerWithOwnership = func(_ context.Context, _ string, srcOnHost, dstInContainer string, _ bool) error {
+		return copyFileToDir(srcOnHost, dstInContainer)
+	}
+
+	if err := runInDir(hostDir, nil, nil, "git", "reset", "--hard", "HEAD"); err != nil {
+		t.Fatalf("git reset --hard failed: %v", err)
+	}
+
+	syncCalled := false
+	forceSyncCalled := false
+	resetContainer := func() error {
+		forceSyncCalled = true
+		return os.WriteFile(containerFile, []byte("base"), 0o644)
+	}
+
+	var logBuf bytes.Buffer
+	s := &extractSync{
+		ctx:           ctx,
+		containerName: "fake-container",
+		workdir:       containerDir,
+		localRepo:     hostDir,
+		logOut:        &logBuf,
+		errOut:        &logBuf,
+		events:        make(chan watcherEvent, 1),
+		retryQueue:    make(map[string]retryEntry),
+		fileSyncIdle:  make(chan struct{}),
+		gitSyncer: fakeGitSyncer{
+			sync: func() error {
+				syncCalled = true
+				return resetContainer()
+			},
+			forceSync: resetContainer,
+		},
+	}
+	close(s.fileSyncIdle)
+
+	if err := s.performGitSync(); err != nil {
+		t.Fatalf("performGitSync failed: %v", err)
+	}
+	if syncCalled {
+		t.Fatal("expected reset path to force container sync, but regular syncToContainer was used")
+	}
+	if !forceSyncCalled {
+		t.Fatal("expected reset path to call forceSyncToContainer")
+	}
+
+	hostOut, err := os.ReadFile(hostFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(hostOut) != "base" {
+		t.Fatalf("host file was unexpectedly resurrected from container, got %q", string(hostOut))
+	}
+	containerOut, err := os.ReadFile(containerFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(containerOut) != "base" {
+		t.Fatalf("container file not reset to host state, got %q", string(containerOut))
+	}
+}
+
 func TestPerformGitSyncAutoSyncContainerChanges(t *testing.T) {
 	ctx := context.Background()
 
@@ -1032,7 +1259,8 @@ func TestDrainEventQueue(t *testing.T) {
 }
 
 type fakeGitSyncer struct {
-	sync func() error
+	sync      func() error
+	forceSync func() error
 }
 
 func (f fakeGitSyncer) syncToContainer() error {
@@ -1040,6 +1268,13 @@ func (f fakeGitSyncer) syncToContainer() error {
 		return nil
 	}
 	return f.sync()
+}
+
+func (f fakeGitSyncer) forceSyncToContainer() error {
+	if f.forceSync == nil {
+		return f.syncToContainer()
+	}
+	return f.forceSync()
 }
 
 func copyFile(src, dst string) error {

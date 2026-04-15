@@ -35,6 +35,7 @@ type syncOptions struct {
 
 type gitSyncerIface interface {
 	syncToContainer() error
+	forceSyncToContainer() error
 }
 
 type changeSource int
@@ -979,16 +980,35 @@ func (s *extractSync) performGitSync() error {
 		s.debugf("performGitSync: complete, file sync resumed")
 	}()
 
-	// Auto-sync container working tree changes to host before git sync.
+	preferHostReset := s.shouldPreferHostReset(s.ctx)
+	if preferHostReset {
+		fmt.Fprintln(s.logOut, "git sync: host reset detected; discarding container working-tree changes")
+	}
+
+	// Auto-sync container working tree changes to host before git sync unless the
+	// host just performed a reset that intentionally discarded local changes.
 	containerChanges, err := s.collectContainerChanges(s.ctx)
 	if err != nil {
 		return err
 	}
-	if len(containerChanges) > 0 {
+	if !preferHostReset && len(containerChanges) > 0 {
 		fmt.Fprintf(s.logOut, "git sync: container has %d uncommitted change(s), syncing to host\n", len(containerChanges))
 		if err := s.applyContainerChangesToHost(s.ctx, containerChanges); err != nil {
 			return err
 		}
+	}
+
+	// Re-scan host changes after container → host sync so we preserve any
+	// host-local edits that may have been waiting in the file-event queue when
+	// git sync was triggered. This also captures the freshly copied container
+	// changes so we can restore the full dirty working tree after git checkout
+	// or reset operations inside the container.
+	hostChanges, err := s.collectHostChanges(s.ctx)
+	if err != nil {
+		return err
+	}
+	if len(hostChanges) > 0 {
+		fmt.Fprintf(s.logOut, "git sync: preserving %d uncommitted host change(s) across git sync\n", len(hostChanges))
 	}
 
 	// Drain queued file events - they're now stale since git state is changing.
@@ -997,17 +1017,75 @@ func (s *extractSync) performGitSync() error {
 	s.drainEventQueue()
 
 	s.debugf("performGitSync: calling syncToContainer")
-	if err := s.gitSyncer.syncToContainer(); err != nil {
-		return err
+	if preferHostReset {
+		if err := s.gitSyncer.forceSyncToContainer(); err != nil {
+			return err
+		}
+	} else {
+		if err := s.gitSyncer.syncToContainer(); err != nil {
+			return err
+		}
 	}
 
-	// Reapply auto-synced changes after git sync resets container working tree.
-	if len(containerChanges) > 0 {
-		if err := s.applyHostChangesToContainer(s.ctx, containerChanges); err != nil {
+	// Reapply host working-tree changes after git sync resets the container.
+	if len(hostChanges) > 0 {
+		if err := s.applyHostChangesToContainer(s.ctx, hostChanges); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *extractSync) shouldPreferHostReset(ctx context.Context) bool {
+	action, err := latestHostReflogAction(ctx, s.localRepo)
+	if err != nil {
+		s.debugf("performGitSync: could not inspect host reflog: %v", err)
+		return false
+	}
+	if !strings.HasPrefix(action, "reset:") {
+		return false
+	}
+	clean, err := hostTrackedWorktreeClean(ctx, s.localRepo)
+	if err != nil {
+		s.debugf("performGitSync: could not inspect host tracked status: %v", err)
+		return false
+	}
+	if clean {
+		s.debugf("performGitSync: latest host reflog action %q indicates a reset with clean tracked worktree", action)
+	}
+	return clean
+}
+
+func latestHostReflogAction(ctx context.Context, repo string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "reflog", "-1", "--format=%gs", "HEAD")
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git reflog: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func hostTrackedWorktreeClean(ctx context.Context, repo string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "-z", "--untracked-files=no")
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("git status tracked-only: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return len(out) == 0, nil
+}
+
+func (s *extractSync) collectHostChanges(ctx context.Context) ([]trackedChange, error) {
+	entries, err := gitStatusPorcelainHost(ctx, s.localRepo, nil)
+	if err != nil {
+		return nil, err
+	}
+	changes := buildTrackedChanges(entries)
+	if len(changes) == 0 {
+		return nil, nil
+	}
+	return changes, nil
 }
 
 func (s *extractSync) collectContainerChanges(ctx context.Context) ([]trackedChange, error) {
@@ -1148,7 +1226,7 @@ func (s *extractSync) signalFileSyncIdle() {
 }
 
 func gitStatusPorcelainHost(ctx context.Context, repo string, paths []string) ([]statusEntry, error) {
-	args := []string{"-c", "core.quotePath=false", "status", "--porcelain"}
+	args := []string{"status", "--porcelain", "-z", "--untracked-files=all"}
 	if len(paths) > 0 {
 		args = append(args, "--")
 		for _, p := range paths {
@@ -1165,7 +1243,7 @@ func gitStatusPorcelainHost(ctx context.Context, repo string, paths []string) ([
 }
 
 func gitStatusPorcelainContainer(ctx context.Context, name, workdir string, paths []string) ([]statusEntry, error) {
-	args := []string{"git", "-c", "core.quotePath=false", "status", "--porcelain"}
+	args := []string{"git", "status", "--porcelain", "-z", "--untracked-files=all"}
 	if len(paths) > 0 {
 		args = append(args, "--")
 		args = append(args, paths...)
@@ -1178,25 +1256,33 @@ func gitStatusPorcelainContainer(ctx context.Context, name, workdir string, path
 }
 
 func parseStatusOutput(out string) []statusEntry {
-	var entries []statusEntry
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == "" {
+	if out == "" {
+		return nil
+	}
+
+	records := strings.Split(out, "\x00")
+	entries := make([]statusEntry, 0, len(records))
+	for i := 0; i < len(records); i++ {
+		record := records[i]
+		if record == "" {
 			continue
 		}
-		if len(line) < 3 {
+		if len(record) < 3 {
 			continue
 		}
-		x := rune(line[0])
-		y := rune(line[1])
-		// Include untracked files (??), as they may have been extracted but are outside git tree
-		rest := strings.TrimSpace(line[3:])
-		entry := statusEntry{staged: x, unstaged: y}
-		if strings.Contains(rest, " -> ") {
-			parts := strings.SplitN(rest, " -> ", 2)
-			entry.oldPath = filepath.ToSlash(parts[0])
-			entry.path = filepath.ToSlash(parts[1])
-		} else {
-			entry.path = filepath.ToSlash(rest)
+
+		entry := statusEntry{
+			staged:   rune(record[0]),
+			unstaged: rune(record[1]),
+			path:     filepath.ToSlash(record[3:]),
+		}
+		if entry.staged == 'R' || entry.unstaged == 'R' || entry.staged == 'C' || entry.unstaged == 'C' {
+			if i+1 >= len(records) {
+				entries = append(entries, entry)
+				continue
+			}
+			i++
+			entry.oldPath = filepath.ToSlash(records[i])
 		}
 		entries = append(entries, entry)
 	}
