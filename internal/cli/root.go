@@ -79,6 +79,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	// Top-level agent management commands
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(newCmd)
+	rootCmd.AddCommand(pluginCmd)
 	rootCmd.AddCommand(selectCmd)
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(extractCmd)

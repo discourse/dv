@@ -9,8 +9,9 @@ This project provides a containerized development environment that includes:
 - Essential developer tools (vim, ripgrep)
 - Ready-to-use database configuration, fully migrated dev/test databases
 - Various AI helpers preinstalled in the image (Claude, Codex, Aider, Gemini)
-- Multi-agent container management via `dv` top-level commands (`list`, `new`, `select`, `rename`) and the `agent` group
- - Embedded Dockerfile managed by the CLI with safe override mechanisms
+- Multi-agent container management via `dv` top-level commands (`list`, `new`, `select`, `rename`)
+- Plugin bootstrap helpers via `dv new --plugin` and `dv plugin add`
+- Embedded Dockerfile managed by the CLI with safe override mechanisms
 
 ## Prerequisites
 
@@ -80,12 +81,14 @@ With `dv` installed (either via the script or `go build`), run the CLI directly 
    dv extract plugin discourse-akismet
    ```
 
-Optional: manage multiple named containers ("agents"):
+Optional: manage multiple named containers ("agents") and bootstrap plugin workspaces:
 ```bash
-dv new my_project     # create and select a new agent
-dv list               # show all agents for the selected image
-dv select my_project  # select an existing agent
-dv rename old new     # rename an agent
+dv new my_project                         # create and select a new agent
+dv new --plugin discourse-kanban kanban   # create an agent with a plugin pre-cloned
+dv plugin add discourse-solved            # add a plugin to the selected running agent
+dv list                                   # show all agents for the selected image
+dv select my_project                      # select an existing agent
+dv rename old new                         # rename an agent
 ```
 
 ## dv Commands
@@ -264,9 +267,37 @@ Manage multiple containers for the selected image; selection is stored in XDG co
 ```bash
 dv list
 dv new [NAME]
+dv new --plugin discourse-kanban kanban
+dv new --plugin discourse/discourse-kanban kanban
+dv new --plugin git@github.com:my-org/private-plugin.git private-test
 dv select NAME
 dv rename OLD NEW
 ```
+
+`dv new --plugin` creates a normal agent, then clones each requested plugin into the Discourse `plugins/` directory before running provisioning maintenance. `--plugin` is repeatable. Plugin arguments accept:
+
+- `discourse-kanban` shorthand for `https://github.com/discourse/discourse-kanban.git`
+- `owner/repo` shorthand for `https://github.com/owner/repo.git`
+- full HTTPS URLs
+- SSH URLs such as `git@github.com:owner/repo.git`
+
+### dv plugin
+Manage plugins in the selected running agent.
+
+```bash
+dv plugin list
+dv plugin add discourse-kanban
+dv plugin add discourse/discourse-kanban
+dv plugin add git@github.com:my-org/private-plugin.git
+dv plugin add --branch main discourse-kanban
+dv plugin add --skip-maintenance discourse-kanban
+```
+
+Notes:
+- `dv plugin add` clones plugins into `/var/www/discourse/plugins/<repo-name>` by default.
+- After cloning, it runs bundle install and database migrations unless `--skip-maintenance` is used.
+- SSH plugin URLs require SSH agent forwarding in the target container. `dv new --plugin git@github.com:owner/repo.git ...` enables this for the new agent automatically; for `dv plugin add git@...`, use an agent that was created with SSH forwarding or use an HTTPS URL.
+- Use `dv plugin --name NAME add ...` to target a specific running agent.
 
 ### Templates
 Provision containers with pre-defined configurations using YAML templates. This is useful for setting up specific environments, installing plugins/themes, or applying site settings automatically.

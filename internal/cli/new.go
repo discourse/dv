@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -64,6 +63,24 @@ var newCmd = &cobra.Command{
 			tpl = &templateConfig{}
 			if err = yaml.Unmarshal(data, tpl); err != nil {
 				return fmt.Errorf("parse template YAML: %w", err)
+			}
+		}
+
+		pluginInputs, _ := cmd.Flags().GetStringArray("plugin")
+		pluginFlags, err := resolvePluginSpecs(pluginInputs)
+		if err != nil {
+			return err
+		}
+		if len(pluginFlags) > 0 {
+			if tpl == nil {
+				tpl = &templateConfig{}
+			}
+			tpl.Plugins = append(tpl.Plugins, pluginFlags...)
+			for _, input := range pluginInputs {
+				if pluginSpecNeedsSSH(input) {
+					tpl.Git.SSHForward = true
+					break
+				}
 			}
 		}
 
@@ -323,35 +340,13 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 	// 1.5 SSH Forwarding setup
 	if tpl.Git.SSHForward && sshAuthSock != "" {
 		envList = append(envList, "SSH_AUTH_SOCK=/tmp/ssh-agent.sock")
-		fmt.Fprintf(cmd.OutOrStdout(), "Setting up SSH agent forwarding...\n")
-		// Change ownership of the SSH socket to discourse user (it's forwarded from
-		// the host with permissions that don't match the container's discourse user)
-		if _, err := docker.ExecAsRoot(name, workdir, nil, []string{"chown", "discourse:discourse", "/tmp/ssh-agent.sock"}); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to chown SSH socket: %v\n", err)
-		}
-		sshSetup := `
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-`
-		if _, err := docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", sshSetup}); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to setup SSH known_hosts: %v\n", err)
+		if err := setupContainerSSHForwarding(cmd, name, workdir, false); err != nil {
+			return err
 		}
 	}
 
 	// 2. Maintenance Mode: Stop Services
-	fmt.Fprintf(cmd.OutOrStdout(), "Stopping services for provisioning...\n")
-	stopScript := "sudo /usr/bin/sv force-stop pitchfork ember-cli || true"
-	if _, err := docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", stopScript}); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to stop services: %v\n", err)
-	}
-
-	// Ensure services are restarted even if something fails
-	defer func() {
-		fmt.Fprintf(cmd.OutOrStdout(), "Starting services (cleanup)...\n")
-		startScript := "sudo /usr/bin/sv start pitchfork ember-cli || true"
-		_, _ = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", startScript})
-	}()
+	defer stopServicesForProvisioning(cmd, name, workdir)()
 
 	// 3. Discourse branch/PR foundation
 	if tpl.Discourse.PR != 0 {
@@ -373,19 +368,8 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 		testCmd := "echo \"SSH_AUTH_SOCK=$SSH_AUTH_SOCK\"; ls -la $SSH_AUTH_SOCK 2>&1 || echo 'Socket not found'; ssh -T -o BatchMode=yes -o ConnectTimeout=5 git@github.com 2>&1 || true"
 		_ = docker.ExecInteractive(name, workdir, envList, []string{"bash", "-lc", testCmd})
 	}
-	for _, p := range tpl.Plugins {
-		pPath := p.Path
-		if pPath == "" {
-			pPath = path.Join("plugins", path.Base(strings.TrimSuffix(p.Repo, ".git")))
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Installing plugin %s into %s...\n", p.Repo, pPath)
-		cloneCmd := fmt.Sprintf("git clone %s %s", shellQuote(p.Repo), shellQuote(pPath))
-		if p.Branch != "" {
-			cloneCmd = fmt.Sprintf("git clone -b %s %s %s", shellQuote(p.Branch), shellQuote(p.Repo), shellQuote(pPath))
-		}
-		if err := docker.ExecInteractive(name, workdir, envList, []string{"bash", "-lc", cloneCmd}); err != nil {
-			return fmt.Errorf("failed to clone plugin %s: %w", p.Repo, err)
-		}
+	if err := installPlugins(cmd, name, workdir, envList, tpl.Plugins); err != nil {
+		return err
 	}
 
 	// 4.5. Copy configured files (credentials, etc.) into the container according to template rules
@@ -535,6 +519,7 @@ func init() {
 	newCmd.Flags().BoolP("verbose", "v", false, "Print verbose debugging output")
 	newCmd.Flags().String("pr", "", "PR number or search query to checkout")
 	newCmd.Flags().String("branch", "", "Branch to checkout")
+	newCmd.Flags().StringArray("plugin", nil, "Clone plugin into the new agent (NAME, OWNER/REPO, or git URL; repeatable)")
 
 	newCmd.RegisterFlagCompletionFunc("pr", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		configDir, err := xdg.ConfigDir()
