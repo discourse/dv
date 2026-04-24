@@ -276,13 +276,15 @@ func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prN
 func checkoutBranch(cmd *cobra.Command, cfg config.Config, name, workdir, branchName string, envs docker.Envs) error {
 	if branchName == "main" || branchName == "master" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s branch...\n", branchName)
+		assetClobberCmds := strings.Join(buildAssetsClobberCommands(), "\n")
 		script := fmt.Sprintf(`
 set -e
 echo "Checking out %s..."
 git checkout %s > /tmp/dv-git-checkout.log 2>&1
 echo "Pulling latest..."
 git pull > /tmp/dv-git-pull.log 2>&1
-`, branchName, branchName)
+%s
+`, branchName, branchName, assetClobberCmds)
 		return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 	}
 	checkoutCmds := buildBranchCheckoutCommands(branchName)

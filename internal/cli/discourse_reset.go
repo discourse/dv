@@ -28,6 +28,16 @@ func buildPostCheckoutCommands() []string {
 	}
 }
 
+// buildAssetsClobberCommands generates commands to remove compiled Rails assets
+// after changing Discourse branches. A stale asset manifest makes Rails serve
+// static compiled assets instead of recompiling stylesheet changes in development.
+func buildAssetsClobberCommands() []string {
+	return []string{
+		"echo 'Clobbering compiled assets so development assets recompile...'",
+		"bin/rails assets:clobber",
+	}
+}
+
 // buildDatabaseDropCreateMigrateCommands generates commands to drop, create, and migrate databases.
 // When skipDBReset is true, db:drop and db:create are omitted, as well as user seeding.
 // Only migrations and later steps run.
@@ -93,6 +103,7 @@ type discourseResetScriptOpts struct {
 // - Ensures full git history
 // - Executes custom checkout commands
 // - Reinstalls dependencies
+// - Clobbers compiled assets so development assets recompile after branch changes
 // - Migrates databases, and optionally drops and recreates them when opts.SkipDBReset is false
 // - Seeds users
 // - Restarts services on exit
@@ -114,6 +125,9 @@ func buildDiscourseResetScript(checkoutCmds []string, opts discourseResetScriptO
 
 	// Post-checkout steps
 	lines = append(lines, buildPostCheckoutCommands()...)
+
+	// Rails asset cleanup
+	lines = append(lines, buildAssetsClobberCommands()...)
 
 	// Database reset (optional) and migrations
 	lines = append(lines, buildDatabaseDropCreateMigrateCommands(opts)...)
