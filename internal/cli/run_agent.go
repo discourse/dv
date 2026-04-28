@@ -304,7 +304,11 @@ func buildAgentArgs(agent string, prompt string) []string {
 
 func buildAgentInteractive(agent string) []string {
 	if rule, ok := agentRules[strings.ToLower(agent)]; ok {
-		base := rule.interactive()
+		baseBuilder := rule.withoutPrompt
+		if baseBuilder == nil {
+			baseBuilder = rule.interactive
+		}
+		base := baseBuilder()
 		if len(rule.defaults) > 0 {
 			base = injectDefaults(base, rule.defaults)
 		}
@@ -326,11 +330,12 @@ func injectDefaults(argv []string, defaults []string) []string {
 
 // agentRule defines how to run each supported agent.
 type agentRule struct {
-	interactive func() []string
-	withPrompt  func(prompt string) []string
-	defaults    []string
-	env         []string
-	aliases     []string // alternative names for this agent
+	interactive   func() []string
+	withPrompt    func(prompt string) []string
+	withoutPrompt func() []string
+	defaults      []string
+	env           []string
+	aliases       []string // alternative names for this agent
 }
 
 var agentRules = map[string]agentRule{
@@ -400,11 +405,12 @@ var agentRules = map[string]agentRule{
 		defaults:    []string{"--auto-approve"},
 	},
 	"term-llm": {
-		interactive: func() []string { return []string{"term-llm"} },
-		withPrompt:  func(p string) []string { return []string{"term-llm", "ask", "--yolo", p} },
-		defaults:    []string{},
-		aliases:     []string{"tl"},
-		env:         []string{"GOOGLE_SEARCH_API_KEY", "GOOGLE_SEARCH_CX", "CEREBRAS_API_KEY"},
+		interactive:   func() []string { return []string{"term-llm"} },
+		withPrompt:    func(p string) []string { return []string{"term-llm", "ask", "--yolo", p} },
+		withoutPrompt: func() []string { return []string{"term-llm", "chat", "--yolo"} },
+		defaults:      []string{},
+		aliases:       []string{"tl"},
+		env:           []string{"GOOGLE_SEARCH_API_KEY", "GOOGLE_SEARCH_CX", "CEREBRAS_API_KEY"},
 	},
 }
 
