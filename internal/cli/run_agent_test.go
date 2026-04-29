@@ -34,7 +34,7 @@ func TestBuildAgentArgsCodexIncludesSearchBeforeExec(t *testing.T) {
 func TestBuildAgentInteractiveTermLLMUsesChat(t *testing.T) {
 	args := buildAgentInteractive("term-llm")
 
-	want := []string{"term-llm", "chat", "--yolo"}
+	want := []string{"term-llm", "chat", "@developer", "--yolo"}
 	if len(args) != len(want) {
 		t.Fatalf("expected %v, got %v", want, args)
 	}
@@ -45,10 +45,10 @@ func TestBuildAgentInteractiveTermLLMUsesChat(t *testing.T) {
 	}
 }
 
-func TestBuildAgentArgsTermLLMPutsYoloAfterAsk(t *testing.T) {
+func TestBuildAgentArgsTermLLMPutsDeveloperAndYoloAfterAsk(t *testing.T) {
 	args := buildAgentArgs("term-llm", "hello")
 
-	want := []string{"term-llm", "ask", "--yolo", "hello"}
+	want := []string{"term-llm", "ask", "@developer", "--yolo", "hello"}
 	if len(args) != len(want) {
 		t.Fatalf("expected %v, got %v", want, args)
 	}
