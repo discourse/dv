@@ -243,16 +243,25 @@ Push local commits or uncommitted work from the host repository into the running
 dv import [--base main]
 ```
 
-### dv update agents
-Refresh the preinstalled AI agents inside the container (Codex, Gemini, Crush, Claude, Aider, Cursor, OpenCode).
+### dv update agents / agent
+Refresh the preinstalled AI agents inside the container, either all at once or a single named agent.
 
 ```bash
 dv update agents [--name NAME]
+dv update agent AGENT [--name NAME]
+```
+
+Examples:
+
+```bash
+dv update agent term-llm
+dv update agent codex --name my-container
 ```
 
 Notes:
 - Starts the container if needed before running updates.
 - Re-runs the official install scripts or package managers to pull the latest versions.
+- Supported single-agent names include `codex`, `gemini`, `crush`, `copilot`, `opencode`, `amp`, `claude`, `aider`, `cursor`, `droid`, `vibe`, and `term-llm`.
 
 ### dv remove
 Remove the container and optionally the image.
