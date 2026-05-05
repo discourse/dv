@@ -1,7 +1,7 @@
 package huh
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
+	"charm.land/bubbles/v2/textinput"
 )
 
 type Input struct {

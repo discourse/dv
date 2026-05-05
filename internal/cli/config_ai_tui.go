@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"dv/internal/ai"
 	"dv/internal/ai/providers"
@@ -81,6 +81,10 @@ type aiConfigModel struct {
 	spinner         spinner.Model
 	form            *createForm
 	deleteLLM       *ai.LLMModel
+	paneWidth       int
+	leftPaneWidth   int
+	rightPaneWidth  int
+	paneHeight      int
 }
 
 func newAiConfigModel(opts aiConfigOptions) aiConfigModel {
@@ -183,7 +187,7 @@ func (m aiConfigModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.mode == modeCreate && m.form != nil {
 			return m.updateForm(msg)
 		}
@@ -418,7 +422,7 @@ func (m aiConfigModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.testError = ""
 		// Return both spinner tick and test command together
 		return m, tea.Batch(m.spinner.Tick, m.testModelCmd(payload))
-	case " ":
+	case "space":
 		if field := m.form.currentField(); field != nil {
 			if field.Kind == fieldBool {
 				field.BoolValue = !field.BoolValue
@@ -479,36 +483,57 @@ func (m *aiConfigModel) resize() {
 		return
 	}
 
-	// Compact layout for small screens (stacked), side-by-side for larger
-	isCompact := m.width < 80
+	// The lists themselves don't reliably paint their full requested width when
+	// they have little content (notably an empty configured-models list), so we
+	// track pane dimensions separately and let the surrounding Lip Gloss frame
+	// own the full-window layout.
+	isCompact := m.width < 90
+	statusHeight := 2
+	footerHeight := 2 // help + status/toast line
+	if m.isCompactLayout() {
+		footerHeight = 1
+	}
+	reserved := statusHeight + footerHeight + 1 // separators/newlines
+	bodyHeight := max(8, m.height-reserved)
 
 	if isCompact {
-		// Stacked layout - full width, split height
-		headerHeight := 3 // Status line
-		footerHeight := 4 // Detail + help
-		availHeight := m.height - headerHeight - footerHeight
-		listHeight := availHeight / 2
-		if listHeight < 5 {
-			listHeight = 5
+		paneWidth := max(24, m.width-2)
+		paneHeight := bodyHeight - 1 // tab row
+		if paneHeight < 6 {
+			paneHeight = 6
 		}
-		listWidth := m.width - 4
+		m.paneWidth = paneWidth
+		m.leftPaneWidth = paneWidth
+		m.rightPaneWidth = paneWidth
+		m.paneHeight = paneHeight
+		listWidth := max(20, paneWidth-2)
+		listHeight := max(4, paneHeight-2)
 		m.llmList.SetSize(listWidth, listHeight)
 		m.modelList.SetSize(listWidth, listHeight)
-	} else {
-		// Side-by-side layout
-		bodyHeight := max(10, m.height-8)
-		detailHeight := 5
-		listHeight := bodyHeight - detailHeight
-		// Use proportional width
-		leftWidth := (m.width - 4) / 2
-		rightWidth := (m.width - 4) / 2
-		m.llmList.SetSize(leftWidth, listHeight)
-		m.modelList.SetSize(rightWidth, listHeight)
+		return
 	}
+
+	gap := 1
+	leftPaneWidth := max(34, m.width/3)
+	if leftPaneWidth > 48 {
+		leftPaneWidth = 48
+	}
+	rightPaneWidth := m.width - leftPaneWidth - gap
+	if rightPaneWidth < 40 {
+		rightPaneWidth = 40
+		leftPaneWidth = max(30, m.width-rightPaneWidth-gap)
+	}
+	paneHeight := bodyHeight
+	m.leftPaneWidth = leftPaneWidth
+	m.rightPaneWidth = rightPaneWidth
+	m.paneWidth = leftPaneWidth + rightPaneWidth + gap
+	m.paneHeight = paneHeight
+	m.llmList.SetSize(max(20, leftPaneWidth-2), max(4, paneHeight-2))
+	m.modelList.SetSize(max(20, rightPaneWidth-2), max(4, paneHeight-2))
 }
 
 func (m aiConfigModel) isCompactLayout() bool {
-	return m.width < 80
+	return m.width < 90
 }
 
 func (m *aiConfigModel) updateLists() {
@@ -520,7 +545,13 @@ func (m *aiConfigModel) updateLists() {
 	_ = m.catalog // kept for future use
 }
 
-func (m aiConfigModel) View() string {
+func (m aiConfigModel) View() tea.View {
+	view := tea.NewView(m.viewString())
+	view.AltScreen = true
+	return view
+}
+
+func (m aiConfigModel) viewString() string {
 	if m.width == 0 || m.height == 0 {
 		return "Loading..."
 	}
@@ -536,16 +567,16 @@ func (m aiConfigModel) View() string {
 		BorderForeground(lipgloss.Color("240"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
-	left := m.llmList.View()
-	right := m.modelList.View()
-
+	leftStyle := inactiveBorder.Width(max(20, m.leftPaneWidth-2)).Height(max(4, m.paneHeight-2))
+	rightStyle := inactiveBorder.Width(max(20, m.rightPaneWidth-2)).Height(max(4, m.paneHeight-2))
 	if m.focus == focusConfigured {
-		left = activeBorder.Render(left)
-		right = inactiveBorder.Render(right)
+		leftStyle = activeBorder.Width(max(20, m.leftPaneWidth-2)).Height(max(4, m.paneHeight-2))
 	} else {
-		right = activeBorder.Render(right)
-		left = inactiveBorder.Render(left)
+		rightStyle = activeBorder.Width(max(20, m.rightPaneWidth-2)).Height(max(4, m.paneHeight-2))
 	}
+
+	left := leftStyle.Render(m.llmList.View())
+	right := rightStyle.Render(m.modelList.View())
 
 	var body string
 	if isCompact {
@@ -643,10 +674,10 @@ func (m aiConfigModel) View() string {
 				formHeight = 20
 			}
 			m.form.setSize(formWidth, formHeight)
-			return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.form.View(), lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceForeground(lipgloss.Color("8")))
+			return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.form.View(), lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("8"))))
 		}
 	case modeConfirmDelete:
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderDeleteModal(), lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceForeground(lipgloss.Color("8")))
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderDeleteModal(), lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("8"))))
 	}
 	return view
 }
@@ -942,7 +973,7 @@ func (m aiConfigModel) renderSavingModal() string {
 		lipgloss.Center,
 		box.Render(content),
 		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("8")),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("8"))),
 	)
 }
 
@@ -1012,7 +1043,7 @@ func (m aiConfigModel) renderTestingModal() string {
 		lipgloss.Center,
 		box.Render(content),
 		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("8")),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("8"))),
 	)
 }
 
@@ -1190,7 +1221,7 @@ func newCreateForm(entryID string, model ai.ProviderModel, meta ai.LLMMetadata, 
 		}
 	}
 	fields = append(fields, buildProviderParamFields(providerKey, meta, nil, defaults)...)
-	vp := viewport.New(0, 0)
+	vp := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
 	f := &createForm{
 		entryID:  entryID,
 		fields:   fields,
@@ -1219,7 +1250,7 @@ func newEditForm(llm ai.LLMModel, meta ai.LLMMetadata, isDefault bool) *createFo
 		newBoolField("vision_enabled", "Enable vision", llm.VisionEnabled),
 	}
 	fields = append(fields, buildProviderParamFields(llm.Provider, meta, llm.ProviderParams, nil)...)
-	vp := viewport.New(0, 0)
+	vp := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
 	f := &createForm{
 		fields:             fields,
 		entryID:            providerSlug(llm.Provider),
@@ -1371,19 +1402,19 @@ func (f *createForm) setSize(width, height int) {
 	if viewportHeight < 5 {
 		viewportHeight = 5
 	}
-	f.viewport.Width = contentWidth
-	f.viewport.Height = viewportHeight
+	f.viewport.SetWidth(contentWidth)
+	f.viewport.SetHeight(viewportHeight)
 	// Update text input widths
 	for _, field := range f.fields {
 		if field.Kind == fieldInput {
-			field.Model.Width = contentWidth - 4
+			field.Model.SetWidth(contentWidth - 4)
 		}
 	}
 	f.ready = true
 }
 
 func (f *createForm) ensureVisible() {
-	if !f.ready || f.viewport.Height <= 0 {
+	if !f.ready || f.viewport.Height() <= 0 {
 		return
 	}
 	// Calculate the approximate line position of the focused field
@@ -1392,15 +1423,15 @@ func (f *createForm) ensureVisible() {
 		linePos += 3 // Each field takes roughly 3 lines
 	}
 	// Scroll to keep the focused field visible
-	viewTop := f.viewport.YOffset
-	viewBottom := viewTop + f.viewport.Height
+	viewTop := f.viewport.YOffset()
+	viewBottom := viewTop + f.viewport.Height()
 	fieldTop := linePos
 	fieldBottom := linePos + 3
 
 	if fieldTop < viewTop {
 		f.viewport.SetYOffset(fieldTop)
 	} else if fieldBottom > viewBottom {
-		f.viewport.SetYOffset(fieldBottom - f.viewport.Height)
+		f.viewport.SetYOffset(fieldBottom - f.viewport.Height())
 	}
 }
 
@@ -1523,14 +1554,14 @@ func (f *createForm) View() string {
 	content := strings.Join(fieldLines, "\n")
 
 	// Use viewport for scrolling if content is tall
-	if f.ready && f.viewport.Height > 0 {
+	if f.ready && f.viewport.Height() > 0 {
 		f.viewport.SetContent(content)
 		f.ensureVisible()
 		content = f.viewport.View()
 
 		// Show scroll indicator
-		if f.viewport.TotalLineCount() > f.viewport.Height {
-			scrollPct := float64(f.viewport.YOffset) / float64(f.viewport.TotalLineCount()-f.viewport.Height) * 100
+		if f.viewport.TotalLineCount() > f.viewport.Height() {
+			scrollPct := float64(f.viewport.YOffset()) / float64(f.viewport.TotalLineCount()-f.viewport.Height()) * 100
 			scrollIndicator := dimStyle.Render(fmt.Sprintf("─ %.0f%% ─", scrollPct))
 			content += "\n" + scrollIndicator
 		}

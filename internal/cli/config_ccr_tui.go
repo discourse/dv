@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"dv/internal/docker"
 )
@@ -34,7 +34,7 @@ func (m presetModel) Init() tea.Cmd {
 
 func (m presetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			m.quitting = true
@@ -55,11 +55,11 @@ func (m presetModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m presetModel) View() string {
+func (m presetModel) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
-	return "\n" + m.list.View()
+	return tea.NewView("\n" + m.list.View())
 }
 
 func selectRouterPreset() (*routerPreset, error) {
@@ -120,7 +120,7 @@ func (m routeEditorModel) Init() tea.Cmd {
 
 func (m routeEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc":
 			m.quitting = true
@@ -169,11 +169,11 @@ func (m routeEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m routeEditorModel) View() string {
+func (m routeEditorModel) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
-	return "\n" + m.list.View() + "\n\nPress Enter to edit, Ctrl+S to save, Esc to cancel"
+	return tea.NewView("\n" + m.list.View() + "\n\nPress Enter to edit, Ctrl+S to save, Esc to cancel")
 }
 
 func selectCustomRouter(allModels []string, existingRouter map[string]string) (map[string]string, error) {
@@ -258,7 +258,7 @@ func (m modelSelectorModel) Init() tea.Cmd {
 
 func (m modelSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc":
 			m.quitting = true
@@ -279,11 +279,11 @@ func (m modelSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m modelSelectorModel) View() string {
+func (m modelSelectorModel) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
-	return "\n" + m.list.View()
+	return tea.NewView("\n" + m.list.View())
 }
 
 func selectModelForRoute(models []string, currentModel string) (string, error) {

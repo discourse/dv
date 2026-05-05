@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	list "github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	viewport "github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	list "charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	viewport "charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -124,7 +124,7 @@ func initialModel(cmd *cobra.Command) model {
 	}
 	// Log viewport
 	m.logHeight = 10
-	m.logVP = viewport.New(0, m.logHeight)
+	m.logVP = viewport.New(viewport.WithWidth(0), viewport.WithHeight(m.logHeight))
 	m.logVP.SetContent("")
 	// Rename input
 	m.renameInput = textinput.New()
@@ -134,9 +134,9 @@ func initialModel(cmd *cobra.Command) model {
 	// Fallback: set initial width/height from terminal if available
 	if w, h, ok := measureTerminal(); ok {
 		m.width, m.height = w, h
-		m.help.Width = w
-		m.logVP.Width = w
-		m.logVP.Height = m.logHeight
+		m.help.SetWidth(w)
+		m.logVP.SetWidth(w)
+		m.logVP.SetHeight(m.logHeight)
 		m.list.SetSize(w, h-(m.logHeight+4))
 	}
 	m.reload(cmd)
@@ -189,19 +189,25 @@ func (m *model) fetchAgentItems(cfg config.Config) []list.Item {
 
 func (m model) Init() tea.Cmd { return nil }
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	view := tea.NewView(m.viewString())
+	view.AltScreen = true
+	return view
+}
+
+func (m model) viewString() string {
 	var b strings.Builder
 	if m.showHelp {
 		// Modal content
 		content := m.renderHelpModal()
 		// Center with dimmed background
 		return lipgloss.Place(m.currentWidth(), m.currentHeight(), lipgloss.Center, lipgloss.Center, content,
-			lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceForeground(lipgloss.Color("8")))
+			lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("8"))))
 	}
 	if m.showRename {
 		content := m.renderRenameModal()
 		return lipgloss.Place(m.currentWidth(), m.currentHeight(), lipgloss.Center, lipgloss.Center, content,
-			lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceForeground(lipgloss.Color("8")))
+			lipgloss.WithWhitespaceChars("░"), lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("8"))))
 	}
 	b.WriteString(m.list.View())
 	b.WriteString("\n")
@@ -368,19 +374,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			logH = 5
 		}
 		m.width, m.height = t.Width, t.Height
-		m.help.Width = t.Width
-		m.logVP.Width = t.Width
-		m.logVP.Height = logH
+		m.help.SetWidth(t.Width)
+		m.logVP.SetWidth(t.Width)
+		m.logVP.SetHeight(logH)
 		base := 4
 		if m.status != "" {
 			base++
 		}
 		m.list.SetSize(t.Width, t.Height-(logH+base))
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// If rename modal is open, capture keys there
 		if m.showRename {
-			switch t.Type {
-			case tea.KeyEnter:
+			switch t.String() {
+			case "enter":
 				nameNew := strings.TrimSpace(m.renameInput.Value())
 				if nameNew == "" || nameNew == m.renamingOld {
 					m.showRename = false
@@ -395,7 +401,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, func() tea.Msg { return reloadMsg{} }
-			case tea.KeyEsc:
+			case "esc":
 				m.showRename = false
 				m.renameInput.Blur()
 				return m, nil
@@ -624,7 +630,7 @@ var tuiCmd = &cobra.Command{
 	Short: "Open the interactive TUI",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		m := initialModel(cmd)
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		p := tea.NewProgram(m)
 		finalModel, err := p.Run()
 		if err != nil {
 			return err

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	textarea "github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	textarea "charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"dv/internal/config"
@@ -231,7 +231,7 @@ var runAgentCmd = &cobra.Command{
 func collectPromptInteractive(cmd *cobra.Command) (string, error) {
 	// Use a small Bubble Tea textarea for multiline prompt collection
 	m := newPromptModel()
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m)
 	final, err := p.Run()
 	if err != nil {
 		return "", err
@@ -494,12 +494,12 @@ func (m promptModel) Init() tea.Cmd { return nil }
 
 func (m promptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch t := msg.(type) {
-	case tea.KeyMsg:
-		switch t.Type {
-		case tea.KeyEsc:
+	case tea.KeyPressMsg:
+		switch t.String() {
+		case "esc":
 			m.canceled = true
 			return m, tea.Quit
-		case tea.KeyCtrlD, tea.KeyCtrlS:
+		case "ctrl+d", "ctrl+s":
 			// Submit
 			return m, tea.Quit
 		}
@@ -509,10 +509,12 @@ func (m promptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m promptModel) View() string {
+func (m promptModel) View() tea.View {
 	hint := "Ctrl+D to run ? Esc to cancel"
 	box := lipBox(m.ta.View()+"\n"+hint, m.width, m.height)
-	return box
+	view := tea.NewView(box)
+	view.AltScreen = true
+	return view
 }
 
 func lipBox(content string, termW, termH int) string {
