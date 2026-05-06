@@ -12,7 +12,7 @@ import (
 
 var stopCmd = &cobra.Command{
 	Use:   "stop [name]",
-	Short: "Stop the container",
+	Short: "Stop the container or internal discourse services (pitchfork, ember-cli, etc.)",
 	Args:  cobra.MaximumNArgs(1),
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		// Complete container name for the first positional argument
