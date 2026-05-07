@@ -157,10 +157,170 @@ EOF
 RUN chmod +x /etc/runit/3.d/02-ember-cli
 
 RUN mkdir -p /etc/service/caddy && \
+    tee /usr/local/bin/dv-caddy-run > /dev/null <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+log=/var/log/caddy.log
+runtime_caddyfile=/etc/caddy/Caddyfile.runtime
+
+# Keep the historical localhost wildcard, and add any hostname(s) passed by dv
+# when the local proxy is enabled (for example: sideload.dev.home.arpa and
+# *.dev.home.arpa). This lets in-container browsers reach the same HTTPS
+# hostname Discourse advertises without hand-editing /etc/caddy/Caddyfile.
+site_addresses="*.dv.localhost"
+if [[ -n "${DV_CADDY_HOSTS:-}" ]]; then
+    site_addresses="${site_addresses}, ${DV_CADDY_HOSTS}"
+elif [[ -n "${DV_LOCAL_PROXY_HOST:-}" ]]; then
+    site_addresses="${site_addresses}, ${DV_LOCAL_PROXY_HOST}"
+fi
+
+https_block=""
+https_enabled="false"
+if [[ "${DV_LOCAL_PROXY_SCHEME:-}" == "https" || -n "${DV_LOCAL_PROXY_HTTPS_PORT:-}" ]]; then
+    https_enabled="true"
+    https_addresses="${site_addresses}"
+    if [[ -n "${DV_LOCAL_PROXY_HTTPS_PORT:-}" && "${DV_LOCAL_PROXY_HTTPS_PORT}" != "443" ]]; then
+        IFS=',' read -ra caddy_hosts <<< "${site_addresses}"
+        for caddy_host in "${caddy_hosts[@]}"; do
+            caddy_host="${caddy_host#${caddy_host%%[![:space:]]*}}"
+            caddy_host="${caddy_host%${caddy_host##*[![:space:]]}}"
+            [[ -z "${caddy_host}" ]] && continue
+            https_addresses="${https_addresses}, ${caddy_host}:${DV_LOCAL_PROXY_HTTPS_PORT}"
+        done
+    fi
+    https_block="${https_addresses} {
+    tls internal
+    reverse_proxy localhost:4200
+}"
+fi
+
+extra_http_listener=""
+if [[ -n "${DV_LOCAL_PROXY_HTTP_PORT:-}" && "${DV_LOCAL_PROXY_HTTP_PORT}" != "80" ]]; then
+    extra_http_listener=":${DV_LOCAL_PROXY_HTTP_PORT} {
+    reverse_proxy localhost:4200
+}"
+fi
+
+cat > "${runtime_caddyfile}" <<CADDY
+{
+    admin off
+}
+
+:80 {
+    reverse_proxy localhost:4200
+}
+
+${extra_http_listener}
+
+${https_block}
+CADDY
+
+caddy fmt --overwrite "${runtime_caddyfile}" >> "${log}" 2>&1 || true
+
+caddy_pid=""
+tmpdir=""
+
+cleanup_tmpdir() {
+    if [[ -n "${tmpdir}" && -d "${tmpdir}" ]]; then
+        rm -rf "${tmpdir}"
+    fi
+}
+
+stop_caddy() {
+    if [[ -n "${caddy_pid}" ]] && kill -0 "${caddy_pid}" >/dev/null 2>&1; then
+        kill -TERM "${caddy_pid}" >/dev/null 2>&1 || true
+        wait "${caddy_pid}" || true
+    fi
+}
+
+on_exit() {
+    status=$?
+    trap - EXIT
+    cleanup_tmpdir
+    if [[ "${status}" -ne 0 ]]; then
+        stop_caddy
+    fi
+    exit "${status}"
+}
+trap on_exit EXIT
+
+caddy run --config "${runtime_caddyfile}" --adapter caddyfile >> "${log}" 2>&1 &
+caddy_pid=$!
+
+terminate() {
+    trap - TERM INT
+    stop_caddy
+    exit 0
+}
+trap terminate TERM INT
+
+if [[ "${https_enabled}" == "true" ]]; then
+    root_crt=/root/.local/share/caddy/pki/authorities/local/root.crt
+    for _ in {1..300}; do
+        if [[ -f "${root_crt}" ]]; then
+            break
+        fi
+        if ! kill -0 "${caddy_pid}" >/dev/null 2>&1; then
+            wait "${caddy_pid}"
+            exit $?
+        fi
+        sleep 0.1
+    done
+
+    if [[ -f "${root_crt}" ]]; then
+        # Trust Caddy's local CA system-wide without invoking `caddy trust`: this
+        # service runs Caddy with `admin off`, and `caddy trust` may try to fetch the
+        # root from the disabled admin API. Chromium also reads per-user NSS DBs, so
+        # import the same root into both locations used by the discourse user.
+        if command -v update-ca-certificates >/dev/null 2>&1; then
+            install -m 0644 "${root_crt}" /usr/local/share/ca-certificates/caddy-local-root.crt >> "${log}" 2>&1 || true
+            update-ca-certificates >> "${log}" 2>&1 || true
+        fi
+
+        nickname="Caddy Local Authority"
+
+        if command -v certutil >/dev/null 2>&1; then
+            tmpdir="$(mktemp -d)"
+            chmod 0755 "${tmpdir}"
+            root_crt_copy="${tmpdir}/caddy-local-root.crt"
+            nss_password_file="${tmpdir}/caddy-nss-empty-password"
+
+            install -m 0644 "${root_crt}" "${root_crt_copy}"
+            printf '\n' > "${nss_password_file}"
+            chown discourse:discourse "${nss_password_file}"
+
+            for nssdb in /home/discourse/.local/share/pki/nssdb /home/discourse/.pki/nssdb; do
+                install -d -o discourse -g discourse "$(dirname "${nssdb}")" "${nssdb}"
+                if [[ ! -f "${nssdb}/cert9.db" ]]; then
+                    HOME=/home/discourse USER=discourse chpst -u discourse:discourse -U discourse:discourse \
+                        certutil -d "sql:${nssdb}" -N -f "${nss_password_file}" >> "${log}" 2>&1 || true
+                fi
+                if HOME=/home/discourse USER=discourse chpst -u discourse:discourse -U discourse:discourse \
+                    certutil -d "sql:${nssdb}" -L -n "${nickname}" >/dev/null 2>&1; then
+                    HOME=/home/discourse USER=discourse chpst -u discourse:discourse -U discourse:discourse \
+                        certutil -d "sql:${nssdb}" -D -n "${nickname}" >> "${log}" 2>&1 || true
+                fi
+                HOME=/home/discourse USER=discourse chpst -u discourse:discourse -U discourse:discourse \
+                    certutil -d "sql:${nssdb}" -A -t "C,," -n "${nickname}" -i "${root_crt_copy}" -f "${nss_password_file}" >> "${log}" 2>&1 || \
+                    echo "Failed to import ${nickname} into ${nssdb}" >> "${log}"
+            done
+
+            rm -f "${root_crt_copy}" "${nss_password_file}"
+        fi
+    else
+        echo "Timed out waiting for ${root_crt}" >> "${log}"
+    fi
+fi
+
+wait "${caddy_pid}"
+EOF
+RUN chmod +x /usr/local/bin/dv-caddy-run
+
+RUN mkdir -p /etc/service/caddy && \
     tee /etc/service/caddy/run > /dev/null <<'EOF'
 #!/bin/bash
-caddy trust >> /var/log/caddy.log 2>&1
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile >> /var/log/caddy.log 2>&1
+exec /usr/local/bin/dv-caddy-run
 EOF
 RUN chmod +x /etc/service/caddy/run
 RUN tee /etc/service/caddy/finish > /dev/null <<'EOF'

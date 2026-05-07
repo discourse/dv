@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -34,6 +35,8 @@ func applyLocalProxyMetadata(cfg config.Config, containerName string, hostPort i
 	envs["DISCOURSE_HOSTNAME"] = host
 	envs["RAILS_DEVELOPMENT_HOSTS"] = host
 	envs["DV_LOCAL_PROXY_HOST"] = host
+	envs["DV_LOCAL_PROXY_BASE_HOST"] = lp.Hostname
+	envs["DV_CADDY_HOSTS"] = caddyHostsForLocalProxy(host, lp.Hostname)
 	envs["DV_LOCAL_PROXY_HTTP_PORT"] = strconv.Itoa(lp.HTTPPort)
 	if lp.HTTPS {
 		envs["DV_LOCAL_PROXY_SCHEME"] = "https"
@@ -51,6 +54,30 @@ func applyLocalProxyMetadata(cfg config.Config, containerName string, hostPort i
 	}
 
 	return host
+}
+
+func caddyHostsForLocalProxy(host, baseHost string) string {
+	hosts := []string{}
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		hosts = append(hosts, value)
+	}
+
+	add(host)
+	baseHost = strings.TrimSpace(baseHost)
+	if baseHost != "" && strings.TrimPrefix(baseHost, "*.") != "dv.localhost" {
+		add("*." + strings.TrimPrefix(baseHost, "*."))
+	}
+
+	return strings.Join(hosts, ", ")
 }
 
 func registerWithLocalProxy(cmd *cobra.Command, cfg config.Config, containerName string, host string, containerPort int) {
