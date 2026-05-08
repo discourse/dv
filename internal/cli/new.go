@@ -273,6 +273,36 @@ func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prN
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 
+func configureDiscourseRepo(cmd *cobra.Command, name, workdir, repoURL string, envs docker.Envs) error {
+	fmt.Fprintf(cmd.OutOrStdout(), "Configuring Discourse repository %s...\n", repoURL)
+	script := fmt.Sprintf(`
+set -euo pipefail
+repo_url=%s
+current_url=$(git remote get-url origin 2>/dev/null || true)
+if [ -z "$current_url" ]; then
+  git remote add origin "$repo_url"
+elif [ "$current_url" != "$repo_url" ]; then
+  git remote set-url origin "$repo_url"
+fi
+echo "Fetching from origin..."
+git fetch origin --tags --prune --force
+`, shellQuote(repoURL))
+	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
+}
+
+func checkoutBranchFromOrigin(cmd *cobra.Command, name, workdir, branchName string, envs docker.Envs) error {
+	fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch %s from configured origin...\n", branchName)
+	script := fmt.Sprintf(`
+set -euo pipefail
+_branch=%s
+git fetch origin "$_branch" --tags --prune --force
+git checkout -B "$_branch" "origin/$_branch"
+git reset --hard "origin/$_branch"
+%s
+`, shellQuote(branchName), strings.Join(buildAssetsClobberCommands(), "\n"))
+	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
+}
+
 func checkoutBranch(cmd *cobra.Command, cfg config.Config, name, workdir, branchName string, envs docker.Envs) error {
 	if branchName == "main" || branchName == "master" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s branch...\n", branchName)
@@ -350,16 +380,27 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 	// 2. Maintenance Mode: Stop Services
 	defer stopServicesForProvisioning(cmd, name, workdir)()
 
-	// 3. Discourse branch/PR foundation
+	// 3. Discourse repository/branch/PR foundation
+	if tpl.Discourse.Repo != "" {
+		if err := configureDiscourseRepo(cmd, name, workdir, tpl.Discourse.Repo, envList); err != nil {
+			return err
+		}
+	}
 	if tpl.Discourse.PR != 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Checking out PR %d...\n", tpl.Discourse.PR)
 		if err := checkoutPR(cmd, cfg, name, workdir, tpl.Discourse.PR, envList); err != nil {
 			return err
 		}
 	} else if tpl.Discourse.Branch != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch %s...\n", tpl.Discourse.Branch)
-		if err := checkoutBranch(cmd, cfg, name, workdir, tpl.Discourse.Branch, envList); err != nil {
-			return err
+		if tpl.Discourse.Repo != "" {
+			if err := checkoutBranchFromOrigin(cmd, name, workdir, tpl.Discourse.Branch, envList); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch %s...\n", tpl.Discourse.Branch)
+			if err := checkoutBranch(cmd, cfg, name, workdir, tpl.Discourse.Branch, envList); err != nil {
+				return err
+			}
 		}
 	}
 

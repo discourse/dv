@@ -1,0 +1,18 @@
+# templates/private-fork.yaml
+# Example template for creating an agent from a private Discourse fork/mirror.
+#
+# Replace the repo URL with your private fork. SSH is recommended because this
+# template enables SSH agent forwarding for private repository access.
+#
+# Usage:
+#   dv new my-private-fork --template templates/private-fork.yaml
+
+discourse:
+  repo: git@github.com:YOUR_ORG/YOUR_PRIVATE_DISCOURSE_FORK.git
+  branch: main
+  # pr: 12345   # Optional: checkout a PR instead of a branch
+
+git:
+  # Requires SSH_AUTH_SOCK to be set on the host and your SSH key to have
+  # access to the private repository above.
+  ssh_forward: true
