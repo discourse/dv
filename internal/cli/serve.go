@@ -638,12 +638,12 @@ func handleContainerRun(w http.ResponseWriter, r *http.Request, configDir, name 
 	argv := []string{"bash", "-lc", req.Cmd}
 	if req.AsRoot {
 		streamExec(w, func(stdout, stderr io.Writer) error {
-			return execStreamAsUser("root", name, workdir, envs, argv, stdout, stderr)
+			return execStreamAsUserContext(r.Context(), "root", name, workdir, envs, argv, stdout, stderr)
 		}, true)
 		return
 	}
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStream(name, workdir, envs, argv, stdout, stderr)
+		return docker.ExecStreamContext(r.Context(), name, workdir, envs, argv, stdout, stderr)
 	}, true)
 }
 
@@ -695,7 +695,7 @@ func handleContainerRunAgent(w http.ResponseWriter, r *http.Request, configDir, 
 	finalArgs := []string{"bash", "-lc", shellCmd}
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStream(name, workdir, envs, finalArgs, stdout, stderr)
+		return docker.ExecStreamContext(r.Context(), name, workdir, envs, finalArgs, stdout, stderr)
 	}, true)
 }
 
@@ -766,7 +766,7 @@ func handleContainerBranch(w http.ResponseWriter, r *http.Request, configDir, na
 	workdir := ctx.workdir
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStream(ctx.name, workdir, nil, argv, stdout, stderr)
+		return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
 	}, true)
 }
 
@@ -795,7 +795,7 @@ func handleContainerCatchup(w http.ResponseWriter, r *http.Request, configDir, n
 	argv := []string{"bash", "-lc", script}
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStream(ctx.name, workdir, nil, argv, stdout, stderr)
+		return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
 	}, true)
 }
 
@@ -824,7 +824,7 @@ func handleContainerReset(w http.ResponseWriter, r *http.Request, configDir, nam
 	argv := []string{"bash", "-lc", script}
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStream(ctx.name, workdir, nil, argv, stdout, stderr)
+		return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
 	}, true)
 }
 
@@ -896,9 +896,9 @@ func handleContainerUpdateAgents(w http.ResponseWriter, r *http.Request, configD
 			argv := []string{"bash", "-lc", shellCmd}
 			execFn := func(stdout, stderr io.Writer) error {
 				if step.runAsRoot {
-					return execStreamAsUser("root", ctx.name, workdir, nil, argv, stdout, stderr)
+					return execStreamAsUserContext(r.Context(), "root", ctx.name, workdir, nil, argv, stdout, stderr)
 				}
-				return docker.ExecStream(ctx.name, workdir, nil, argv, stdout, stderr)
+				return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
 			}
 			if err := runExecWithSSE(sse, execFn); err != nil {
 				return err
@@ -1465,13 +1465,17 @@ func streamHostCommandWithEnv(w http.ResponseWriter, ctx context.Context, name s
 }
 
 func execStreamAsUser(user, name, workdir string, envs docker.Envs, argv []string, stdout, stderr io.Writer) error {
+	return execStreamAsUserContext(context.Background(), user, name, workdir, envs, argv, stdout, stderr)
+}
+
+func execStreamAsUserContext(ctx context.Context, user, name, workdir string, envs docker.Envs, argv []string, stdout, stderr io.Writer) error {
 	args := []string{"exec", "--user", user, "-w", workdir}
 	for _, e := range envs {
 		args = append(args, "-e", e)
 	}
 	args = append(args, name)
 	args = append(args, argv...)
-	cmd := exec.Command("docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
