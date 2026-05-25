@@ -280,3 +280,170 @@ func TestIsTruthyEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveMountHost(t *testing.T) {
+	// Cannot t.Parallel(): one case uses t.Setenv which forbids parallel subtests.
+
+	const home = "/home/alice"
+	tests := []struct {
+		name  string
+		mount Mount
+		env   map[string]string
+		want  string
+	}{
+		{
+			name:  "tilde expansion",
+			mount: Mount{Host: "~/data", Container: "/data"},
+			want:  "/home/alice/data",
+		},
+		{
+			name:  "bare tilde",
+			mount: Mount{Host: "~", Container: "/h"},
+			want:  "/home/alice",
+		},
+		{
+			name:  "env var expansion",
+			mount: Mount{Host: "$WORKSPACE/cache", Container: "/cache"},
+			env:   map[string]string{"WORKSPACE": "/tmp/work"},
+			want:  "/tmp/work/cache",
+		},
+		{
+			name:  "absolute path passthrough",
+			mount: Mount{Host: "/etc/config", Container: "/etc/config"},
+			want:  "/etc/config",
+		},
+		{
+			name:  "empty host skipped",
+			mount: Mount{Host: "", Container: "/c"},
+			want:  "",
+		},
+		{
+			name:  "empty container skipped",
+			mount: Mount{Host: "/h", Container: ""},
+			want:  "",
+		},
+		{
+			name:  "tilde without slash is not expanded",
+			mount: Mount{Host: "~user/data", Container: "/c"},
+			want:  "~user/data",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			got := resolveMountHost(tt.mount, home)
+			if got != tt.want {
+				t.Errorf("resolveMountHost() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMountArgs(t *testing.T) {
+	t.Parallel()
+
+	const home = "/home/alice"
+	tests := []struct {
+		name   string
+		mounts []Mount
+		want   []string
+	}{
+		{
+			name:   "no mounts produces no args",
+			mounts: nil,
+			want:   nil,
+		},
+		{
+			name: "single read-write mount",
+			mounts: []Mount{
+				{Host: "/h", Container: "/c"},
+			},
+			want: []string{"-v", "/h:/c"},
+		},
+		{
+			name: "read_only adds :ro suffix",
+			mounts: []Mount{
+				{Host: "/h", Container: "/c", ReadOnly: true},
+			},
+			want: []string{"-v", "/h:/c:ro"},
+		},
+		{
+			name: "tilde-expanded host appears in spec",
+			mounts: []Mount{
+				{Host: "~/data", Container: "/data"},
+			},
+			want: []string{"-v", "/home/alice/data:/data"},
+		},
+		{
+			name: "empty fields skip the mount",
+			mounts: []Mount{
+				{Host: "", Container: "/c"},
+				{Host: "/h", Container: ""},
+				{Host: "/ok", Container: "/ok"},
+			},
+			want: []string{"-v", "/ok:/ok"},
+		},
+		{
+			name: "multiple mounts preserve order",
+			mounts: []Mount{
+				{Host: "/a", Container: "/x"},
+				{Host: "/b", Container: "/y", ReadOnly: true},
+			},
+			want: []string{"-v", "/a:/x", "-v", "/b:/y:ro"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mountArgs(tt.mounts, home)
+			if len(got) != len(tt.want) {
+				t.Fatalf("mountArgs() len = %d, want %d (got %v)", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("mountArgs()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestEnsureMountHostPathsCreatesMissingDir(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	missing := filepath.Join(tmp, "auto", "created")
+	ensureMountHostPaths([]Mount{{Host: missing, Container: "/c"}}, "")
+	info, err := os.Stat(missing)
+	if err != nil {
+		t.Fatalf("expected %s to be created, got: %v", missing, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("expected %s to be a directory", missing)
+	}
+}
+
+func TestEnsureMountHostPathsLeavesExistingFileAlone(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	file := filepath.Join(tmp, "config")
+	if err := os.WriteFile(file, []byte("data"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ensureMountHostPaths([]Mount{{Host: file, Container: "/etc/config"}}, "")
+
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatalf("file went missing: %v", err)
+	}
+	if info.IsDir() {
+		t.Errorf("expected %s to remain a file, became a directory", file)
+	}
+	contents, _ := os.ReadFile(file)
+	if string(contents) != "data" {
+		t.Errorf("file contents changed: got %q", contents)
+	}
+}

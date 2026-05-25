@@ -206,10 +206,18 @@ var newCmd = &cobra.Command{
 		}
 		// initialize container by running a no-op command
 		var templateEnvs map[string]string
+		var templateMounts []docker.Mount
 		if tpl != nil {
 			templateEnvs = tpl.Env
+			for _, m := range tpl.Mounts {
+				templateMounts = append(templateMounts, docker.Mount{
+					Host:      m.Host,
+					Container: m.Container,
+					ReadOnly:  m.ReadOnly,
+				})
+			}
 		}
-		if err = ensureContainerRunningWithWorkdir(cmd, cfg, name, workdir, imageTag, imgName, false, sshAuthSock, templateEnvs); err != nil {
+		if err = ensureContainerRunningWithWorkdir(cmd, cfg, name, workdir, imageTag, imgName, false, sshAuthSock, templateEnvs, templateMounts); err != nil {
 			return err
 		}
 		containerCreated = true
