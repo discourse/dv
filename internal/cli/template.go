@@ -20,6 +20,13 @@ type templateConfig struct {
 	Themes   []templateTheme   `yaml:"themes"`
 	Settings map[string]any    `yaml:"settings"`
 	MCP      []templateMCP     `yaml:"mcp"`
+	Mounts   []templateMount   `yaml:"mounts"`
+}
+
+type templateMount struct {
+	Host      string `yaml:"host"`
+	Container string `yaml:"container"`
+	ReadOnly  bool   `yaml:"read_only"`
 }
 
 type templatePlugin struct {

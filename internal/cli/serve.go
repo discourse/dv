@@ -289,7 +289,7 @@ func handleContainerCreate(w http.ResponseWriter, r *http.Request, configDir str
 				"DISCOURSE_PORT": strconv.Itoa(chosenPort),
 			}
 			logger(fmt.Sprintf("Creating and starting container '%s' with image '%s'...\n", name, imgCfg.Tag))
-			if err := docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, containerPort, labels, envs, nil, ""); err != nil {
+			if err := docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, containerPort, labels, envs, nil, "", nil); err != nil {
 				return err
 			}
 		} else if !docker.Running(name) {
@@ -452,7 +452,7 @@ func handleContainerStart(w http.ResponseWriter, r *http.Request, configDir, nam
 				"DISCOURSE_PORT": strconv.Itoa(chosenPort),
 			}
 			logger(fmt.Sprintf("Creating and starting container '%s'...\n", name))
-			return docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, cfg.ContainerPort, labels, envs, nil, "")
+			return docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, cfg.ContainerPort, labels, envs, nil, "", nil)
 		}
 		if !docker.Running(name) {
 			logger(fmt.Sprintf("Starting container '%s'...\n", name))

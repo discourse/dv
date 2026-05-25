@@ -341,12 +341,81 @@ func ContainerIP(name string) (string, error) {
 	return ip, nil
 }
 
-func RunDetached(name, workdir, image string, hostPort, containerPort int, labels map[string]string, envs map[string]string, extraHosts []string, sshAuthSock string) error {
+// Mount describes a bind mount to apply when running a container.
+// Host paths may include ~ or $VAR and are expanded relative to the
+// invoking user's home directory.
+type Mount struct {
+	Host      string
+	Container string
+	ReadOnly  bool
+}
+
+// resolveMountHost expands ~ and environment variables in m.Host and
+// returns the effective host path. Returns "" when the mount should be
+// skipped entirely (either Host or Container is empty after expansion).
+// Pure function: no filesystem side effects.
+func resolveMountHost(m Mount, home string) string {
+	hostPath := m.Host
+	if strings.HasPrefix(hostPath, "~/") || hostPath == "~" {
+		hostPath = filepath.Join(home, strings.TrimPrefix(hostPath, "~"))
+	}
+	hostPath = os.ExpandEnv(hostPath)
+	if hostPath == "" || m.Container == "" {
+		return ""
+	}
+	return hostPath
+}
+
+// mountArgs returns the `-v` arguments to append to a docker run for the
+// given mounts. Pure function: no filesystem side effects.
+func mountArgs(mounts []Mount, home string) []string {
+	var args []string
+	for _, m := range mounts {
+		hostPath := resolveMountHost(m, home)
+		if hostPath == "" {
+			continue
+		}
+		spec := hostPath + ":" + m.Container
+		if m.ReadOnly {
+			spec += ":ro"
+		}
+		args = append(args, "-v", spec)
+	}
+	return args
+}
+
+// ensureMountHostPaths auto-creates any missing host directories so the
+// first run of a fresh project doesn't fail with "no such file or
+// directory". Existing paths (directory OR file) are left alone: docker
+// bind-mounts files to files just fine, and MkdirAll would fail on a
+// file. This is a deliberate convenience — a typo in a host path will
+// still create an empty directory and mount it, which mirrors docker's
+// own auto-create behaviour (docker creates missing host paths as root;
+// doing it here ensures the user owns them).
+func ensureMountHostPaths(mounts []Mount, home string) {
+	for _, m := range mounts {
+		hostPath := resolveMountHost(m, home)
+		if hostPath == "" {
+			continue
+		}
+		if _, err := os.Stat(hostPath); !os.IsNotExist(err) {
+			continue
+		}
+		if err := os.MkdirAll(hostPath, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create mount host path %s: %v\n", hostPath, err)
+		}
+	}
+}
+
+func RunDetached(name, workdir, image string, hostPort, containerPort int, labels map[string]string, envs map[string]string, extraHosts []string, sshAuthSock string, mounts []Mount) error {
 	args := []string{"run", "-d",
 		"--name", name,
 		"-w", workdir,
 		"-p", fmt.Sprintf("127.0.0.1:%d:%d", hostPort, containerPort),
 	}
+	home, _ := os.UserHomeDir()
+	ensureMountHostPaths(mounts, home)
+	args = append(args, mountArgs(mounts, home)...)
 	// hostSSHAuthSock tracks what SSH_AUTH_SOCK should be on the host for Docker to forward
 	hostSSHAuthSock := sshAuthSock
 	if sshAuthSock != "" {
