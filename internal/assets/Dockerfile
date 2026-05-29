@@ -112,49 +112,58 @@ RUN /sbin/boot & \
 
 RUN sudo -H -u discourse /bin/bash -lc "cd /var/www/discourse && npx playwright install-deps && npx playwright install"
 
-RUN mkdir -p /etc/service/pitchfork && \
-    tee /etc/service/pitchfork/run > /dev/null <<'EOF'
+RUN mkdir -p /etc/service/rails && \
+    tee /etc/service/rails/run > /dev/null <<'EOF'
 #!/bin/bash
 
 cd /var/www/discourse
-HOME=/home/discourse USER=discourse exec chpst -u discourse:discourse -U discourse:discourse bin/pitchfork >> /var/www/discourse/log/unicorn.log 2>&1
+HOME=/home/discourse USER=discourse UNICORN_BIND_ALL=1 exec chpst -u discourse:discourse -U discourse:discourse bin/rails s >> /var/www/discourse/log/rails.log 2>&1
 EOF
-RUN chmod +x /etc/service/pitchfork/run
-RUN tee /etc/service/pitchfork/finish > /dev/null <<'EOF'
+RUN chmod +x /etc/service/rails/run
+RUN tee /etc/service/rails/finish > /dev/null <<'EOF'
 #!/bin/bash
-pkill -f "unicorn master" || true
-pkill -f "unicorn worker" || true
+pkill -f "pitchfork" || true
 EOF
-RUN chmod +x /etc/service/pitchfork/finish
+RUN chmod +x /etc/service/rails/finish
 
 RUN mkdir -p /etc/runit/3.d && \
-    tee /etc/runit/3.d/03-pitchfork > /dev/null <<'EOF'
+    tee /etc/runit/3.d/03-rails > /dev/null <<'EOF'
 #!/bin/bash
-sv stop pitchfork
+sv stop rails
 EOF
-RUN chmod +x /etc/runit/3.d/03-pitchfork
+RUN chmod +x /etc/runit/3.d/03-rails
 
-RUN mkdir -p /etc/service/ember-cli && \
-    tee /etc/service/ember-cli/run > /dev/null <<'EOF'
+RUN mkdir -p /etc/service/ember && \
+    tee /etc/service/ember/run > /dev/null <<'EOF'
 #!/bin/bash
 
 cd /var/www/discourse
-HOME=/home/discourse UNICORN_PORT=9292 PITCHFORK_PORT=9292 USER=discourse exec chpst -u discourse:discourse -U discourse:discourse bin/ember-cli >> /var/www/discourse/log/ember-cli.log 2>&1
+# Pick the JS dev command based on which Discourse layout is on disk:
+#   - rolldown (post-PR#35963): bin/dev --only ember runs the rolldown watcher
+#   - legacy ember-cli:         bin/ember-cli serves the proxy on :4200
+if [ -f /var/www/discourse/frontend/discourse/rolldown.config.mjs ]; then
+    js_cmd=("bin/dev" "--only" "ember")
+else
+    js_cmd=("bin/ember-cli")
+fi
+HOME=/home/discourse UNICORN_PORT=3000 USER=discourse exec chpst -u discourse:discourse -U discourse:discourse "${js_cmd[@]}" >> /var/www/discourse/log/ember.log 2>&1
 EOF
-RUN chmod +x /etc/service/ember-cli/run
-RUN tee /etc/service/ember-cli/finish > /dev/null <<'EOF'
+RUN chmod +x /etc/service/ember/run
+RUN tee /etc/service/ember/finish > /dev/null <<'EOF'
 #!/bin/bash
 pkill -f "bin/ember-cli" || true
+pkill -f "bin/dev" || true
 pkill -f "node.*ember" || true
+pkill -f "rolldown" || true
 EOF
-RUN chmod +x /etc/service/ember-cli/finish
+RUN chmod +x /etc/service/ember/finish
 
 RUN mkdir -p /etc/runit/3.d && \
-    tee /etc/runit/3.d/02-ember-cli > /dev/null <<'EOF'
+    tee /etc/runit/3.d/02-ember > /dev/null <<'EOF'
 #!/bin/bash
-sv stop ember-cli
+sv stop ember
 EOF
-RUN chmod +x /etc/runit/3.d/02-ember-cli
+RUN chmod +x /etc/runit/3.d/02-ember
 
 RUN mkdir -p /etc/service/caddy && \
     tee /usr/local/bin/dv-caddy-run > /dev/null <<'EOF'
@@ -191,14 +200,14 @@ if [[ "${DV_LOCAL_PROXY_SCHEME:-}" == "https" || -n "${DV_LOCAL_PROXY_HTTPS_PORT
     fi
     https_block="${https_addresses} {
     tls internal
-    reverse_proxy localhost:4200
+    reverse_proxy localhost:3000
 }"
 fi
 
 extra_http_listener=""
 if [[ -n "${DV_LOCAL_PROXY_HTTP_PORT:-}" && "${DV_LOCAL_PROXY_HTTP_PORT}" != "80" ]]; then
     extra_http_listener=":${DV_LOCAL_PROXY_HTTP_PORT} {
-    reverse_proxy localhost:4200
+    reverse_proxy localhost:3000
 }"
 fi
 
@@ -208,7 +217,7 @@ cat > "${runtime_caddyfile}" <<CADDY
 }
 
 :80 {
-    reverse_proxy localhost:4200
+    reverse_proxy localhost:3000
 }
 
 ${extra_http_listener}
@@ -336,12 +345,12 @@ RUN mkdir -p /etc/caddy && \
 }
 
 :80 {
-    reverse_proxy localhost:4200
+    reverse_proxy localhost:3000
 }
 
 *.dv.localhost {
     tls internal
-    reverse_proxy localhost:4200
+    reverse_proxy localhost:3000
 }
 EOF
 
@@ -356,9 +365,12 @@ ENV LEFTHOOK=1
 ENV DISCOURSE_DEV_ALLOW_ANON_TO_IMPERSONATE=1
 # allows qunit to work without CI being set to 1 which breaks a bunch of agents
 ENV DISCOURSE_DISABLE_BROWSER_SANDBOX=1
-ENV TESTEM_DEFAULT_BROWSER=Chromium 
+ENV TESTEM_DEFAULT_BROWSER=Chromium
 ENV CHROME_BIN=/usr/bin/chromium
-ENV UNICORN_PORT=9292
-ENV PITCHFORK_PORT=9292
+ENV UNICORN_PORT=3000
+# Let clients hit Rails (on 3000) directly even when the ember-cli proxy is
+# running. On pre-rolldown Discourse this stops Rails from forcing a redirect
+# to the ember-cli dev server.
+ENV ALLOW_EMBER_CLI_PROXY_BYPASS=1
 
 ENTRYPOINT ["/sbin/boot"]

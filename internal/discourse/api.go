@@ -401,7 +401,7 @@ func getContainerHostPort(containerName string) (int, error) {
 		return 0, fmt.Errorf("get container port: %w", err)
 	}
 
-	// Parse output like "4200/tcp -> 0.0.0.0:4201"
+	// Parse output like "3000/tcp -> 0.0.0.0:3001"
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {

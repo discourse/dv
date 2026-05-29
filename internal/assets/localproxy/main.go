@@ -180,7 +180,7 @@ func newRouteHealer(table *proxyTable, inspector containerInspector, hostSuffix 
 		timeout = 1500 * time.Millisecond
 	}
 	if containerPort <= 0 {
-		containerPort = 4200
+		containerPort = 3000
 	}
 	if strings.TrimSpace(hostSuffix) == "" {
 		hostSuffix = defaultHostnameSuffix
@@ -687,7 +687,7 @@ func main() {
 	autoHeal := envBoolOrDefault("PROXY_AUTO_HEAL", true)
 	diagnosticHTML := envBoolOrDefault("PROXY_DIAGNOSTIC_HTML", true)
 	autoHealTimeout := time.Duration(envIntOrDefault("PROXY_AUTO_HEAL_TIMEOUT_MS", 1500)) * time.Millisecond
-	autoHealContainerPort := envIntOrDefault("PROXY_AUTO_HEAL_CONTAINER_PORT", 4200)
+	autoHealContainerPort := envIntOrDefault("PROXY_AUTO_HEAL_CONTAINER_PORT", 3000)
 	dockerSocketPath := envOrDefault("PROXY_DOCKER_SOCKET", "/var/run/docker.sock")
 
 	table := newProxyTable()

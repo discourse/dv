@@ -293,6 +293,88 @@ func TestLoadOrCreate_MigratesLegacyConfigFormat(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreate_BumpsLegacyEmberCLIPort(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	stored := map[string]interface{}{
+		"hostStartingPort": 4200,
+		"containerPort":    4200,
+		"selectedImage":    "discourse",
+		"images": map[string]interface{}{
+			"discourse": map[string]interface{}{
+				"kind":          "discourse",
+				"tag":           "ai_agent",
+				"workdir":       "/var/www/discourse",
+				"containerPort": 4200,
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(stored, "", "  ")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(tmpDir), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if cfg.ContainerPort != 3000 {
+		t.Fatalf("expected top-level ContainerPort migrated to 3000, got %d", cfg.ContainerPort)
+	}
+	if cfg.HostStartingPort != 3000 {
+		t.Fatalf("expected HostStartingPort migrated to 3000, got %d", cfg.HostStartingPort)
+	}
+	if cfg.Images["discourse"].ContainerPort != 3000 {
+		t.Fatalf("expected images.discourse.ContainerPort migrated to 3000, got %d", cfg.Images["discourse"].ContainerPort)
+	}
+}
+
+func TestLoadOrCreate_PreservesExplicitNonDefaultPort(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	stored := map[string]interface{}{
+		"hostStartingPort": 8080,
+		"containerPort":    9292,
+		"selectedImage":    "discourse",
+		"images": map[string]interface{}{
+			"discourse": map[string]interface{}{
+				"kind":          "discourse",
+				"tag":           "ai_agent",
+				"workdir":       "/var/www/discourse",
+				"containerPort": 9292,
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(stored, "", "  ")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(tmpDir), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if cfg.ContainerPort != 9292 {
+		t.Fatalf("expected ContainerPort preserved at 9292, got %d", cfg.ContainerPort)
+	}
+	if cfg.HostStartingPort != 8080 {
+		t.Fatalf("expected HostStartingPort preserved at 8080, got %d", cfg.HostStartingPort)
+	}
+	if cfg.Images["discourse"].ContainerPort != 9292 {
+		t.Fatalf("expected images.discourse.ContainerPort preserved at 9292, got %d", cfg.Images["discourse"].ContainerPort)
+	}
+}
+
 func TestLoadOrCreate_InitializesNilMaps(t *testing.T) {
 	t.Parallel()
 

@@ -103,13 +103,13 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 
 func stopServicesForProvisioning(cmd *cobra.Command, name, workdir string) func() {
 	fmt.Fprintf(cmd.OutOrStdout(), "Stopping services for provisioning...\n")
-	stopScript := "sudo /usr/bin/sv force-stop pitchfork ember-cli || true"
+	stopScript := "sudo /usr/bin/sv force-stop rails ember || true"
 	if _, err := docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", stopScript}); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to stop services: %v\n", err)
 	}
 	return func() {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting services (cleanup)...\n")
-		startScript := "sudo /usr/bin/sv start pitchfork ember-cli || true"
+		startScript := "sudo /usr/bin/sv start rails ember || true"
 		_, _ = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", startScript})
 	}
 }

@@ -363,10 +363,10 @@ func handleContainer(w http.ResponseWriter, r *http.Request, configDir string, p
 		case "logs":
 			if len(parts) >= 4 {
 				switch parts[3] {
-				case "pitchfork":
-					handleContainerLogTail(w, r, name, "/var/www/discourse/log/unicorn.log")
+				case "rails":
+					handleContainerLogTail(w, r, name, "/var/www/discourse/log/rails.log")
 				case "ember":
-					handleContainerLogTail(w, r, name, "/var/www/discourse/log/ember-cli.log")
+					handleContainerLogTail(w, r, name, "/var/www/discourse/log/ember.log")
 				default:
 					writeJSON(w, http.StatusNotFound, "not found")
 				}

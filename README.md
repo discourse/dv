@@ -134,7 +134,7 @@ dv start [--reset] [--name NAME] [--image NAME] [--host-starting-port N] [--cont
 ```
 
 Notes:
-- Maps host `4201` → container `4200` by default (Ember CLI dev server). Override with flags.
+- Maps host `3000` → container `3000` (Rails) by default. Override with flags.
 - Performs a pre-flight check and picks the next free port if needed.
 
 ### dv stop
@@ -498,7 +498,7 @@ Use `dv config theme [REPO]` to prepare a theme workspace inside the running con
 Use `dv config site_settings FILENAME.yaml` to apply Discourse site settings from a YAML file. Supports 1Password integration via `op://` references for sensitive values.
 
 #### Local proxy (NAME.dv.localhost)
-Run `dv config local-proxy` to build and start a small reverse proxy container (`dv-local-proxy` by default) that maps each new agent to `NAME.dv.localhost` instead of host ports like `localhost:4201`. By default, the proxy listens on localhost only (port 80 for HTTP, 2080 for admin API) for security. Use `--hostname dev.home.arpa` to use `NAME.dev.home.arpa` instead, and use `--public` to bind to all network interfaces. Use `--https` to enable HTTPS on port 443 via a local mkcert certificate (HTTP will redirect to HTTPS). The proxy registers containers as you create/start them and injects hostname env vars so Discourse assets resolve correctly; when `--https` is enabled, new stock Discourse containers also configure their in-container Caddy with the proxy hostname/wildcard and trust Caddy's local CA in Chromium's NSS DB. Stop or remove the proxy container to go back to host-port URLs; only containers created while the proxy is running adopt the hostname.
+Run `dv config local-proxy` to build and start a small reverse proxy container (`dv-local-proxy` by default) that maps each new agent to `NAME.dv.localhost` instead of host ports like `localhost:3000`. By default, the proxy listens on localhost only (port 80 for HTTP, 2080 for admin API) for security. Use `--hostname dev.home.arpa` to use `NAME.dev.home.arpa` instead, and use `--public` to bind to all network interfaces. Use `--https` to enable HTTPS on port 443 via a local mkcert certificate (HTTP will redirect to HTTPS). The proxy registers containers as you create/start them and injects hostname env vars so Discourse assets resolve correctly; when `--https` is enabled, new stock Discourse containers also configure their in-container Caddy with the proxy hostname/wildcard and trust Caddy's local CA in Chromium's NSS DB. Stop or remove the proxy container to go back to host-port URLs; only containers created while the proxy is running adopt the hostname.
 
 #### Claude Code Router (CCR)
 Use `dv config ccr` to bootstrap Claude Code Router presets via OpenRouter/OpenAI rankings.
@@ -577,7 +577,7 @@ Set these on the host to change how `dv build` (and other build helpers) behave:
 The image is based on `discourse/discourse_dev:release` and includes:
 - Full Discourse development environment at `/var/www/discourse`
 - Ruby/Rails stack with bundled dependencies
-- Node.js (pnpm) + Ember CLI dev server
+- Node.js (pnpm) + JS dev build (rolldown on newer Discourse, ember-cli on older)
 - Databases created and migrated for dev/test
 - Development tools (vim, ripgrep)
 - Helper tools installed for code agents
@@ -589,16 +589,16 @@ Runit services log to the following locations inside the container:
 
 | Service    | Log Path                              |
 |------------|---------------------------------------|
-| pitchfork  | `/var/www/discourse/log/unicorn.log`  |
-| ember-cli  | `/var/www/discourse/log/ember-cli.log`|
+| rails      | `/var/www/discourse/log/rails.log`    |
+| ember      | `/var/www/discourse/log/ember.log`    |
 | caddy      | `/var/log/caddy.log`                  |
 | postgresql | `/var/log/postgres/current`           |
 | redis      | `/var/log/redis/current`              |
 
 View logs with:
 ```bash
-dv run -- tail -f /var/www/discourse/log/unicorn.log
-dv run -- tail -f /var/www/discourse/log/ember-cli.log
+dv run -- tail -f /var/www/discourse/log/rails.log
+dv run -- tail -f /var/www/discourse/log/ember.log
 dv run --root -- tail /var/log/caddy.log
 dv run --root -- tail /var/log/postgres/current
 dv run --root -- tail /var/log/redis/current

@@ -185,7 +185,7 @@ func configureDiscourseMCP(cmd *cobra.Command, containerName, workdir string, en
 
 	profilePath := filepath.Join(homeDir, ".config/discourse-mcp/local.json")
 	profileDir := filepath.Join(homeDir, ".config/discourse-mcp")
-	const siteURL = "http://127.0.0.1:9292"
+	const siteURL = "http://127.0.0.1:3000"
 	const apiKeyDescription = "dv discourse-mcp"
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Preparing Discourse MCP profile with read/write access to local instance...")

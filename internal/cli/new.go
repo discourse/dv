@@ -450,13 +450,13 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 
 	// 6. Start Services and Wait for Health
 	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning complete. Starting Discourse and waiting for it to be ready...\n")
-	startScript := "sudo /usr/bin/sv start pitchfork ember-cli || true"
+	startScript := "sudo /usr/bin/sv start rails ember || true"
 	if _, err = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", startScript}); err != nil {
 		return fmt.Errorf("failed to start services: %w", err)
 	}
 
-	// Wait for health check (max 120s)
-	healthCmd := "timeout 120 bash -c 'until curl -s -f http://localhost:4200/srv/status > /dev/null 2>&1; do sleep 2; done' || exit 1"
+	// Wait for health check (max 120s) — hit Rails directly.
+	healthCmd := "timeout 120 bash -c 'until curl -s -f http://localhost:3000/srv/status > /dev/null 2>&1; do sleep 2; done' || exit 1"
 	if _, err = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", healthCmd}); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: Discourse did not become healthy within 120s. Some settings might fail.\n")
 	} else {

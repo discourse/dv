@@ -108,8 +108,8 @@ func Default() Config {
 		Workdir:          "/var/www/discourse",
 		CustomWorkdirs:   map[string]string{},
 		LocalProxy:       defaultLocalProxyConfig(),
-		HostStartingPort: 4200,
-		ContainerPort:    4200,
+		HostStartingPort: 3000,
+		ContainerPort:    3000,
 		EnvPassthrough: []string{
 			"CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
 			"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
@@ -129,7 +129,7 @@ func Default() Config {
 				Kind:          "discourse",
 				Tag:           "ai_agent",
 				Workdir:       "/var/www/discourse",
-				ContainerPort: 4200,
+				ContainerPort: 3000,
 				Dockerfile:    ImageSource{Source: "stock", StockName: "discourse"},
 			},
 		},
@@ -160,6 +160,7 @@ func LoadOrCreate(configDir string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
+	migrateLegacyEmberCLIPort(&cfg)
 	// Migration to new image model if needed
 	// Ensure Images map is initialized and contains at least discourse
 	if cfg.Images == nil || len(cfg.Images) == 0 {
@@ -169,7 +170,7 @@ func LoadOrCreate(configDir string) (Config, error) {
 			Kind:          "discourse",
 			Tag:           defaultIfEmpty(cfg.ImageTag, "ai_agent"),
 			Workdir:       defaultIfEmpty(cfg.Workdir, "/var/www/discourse"),
-			ContainerPort: valueOrDefault(cfg.ContainerPort, 4200),
+			ContainerPort: valueOrDefault(cfg.ContainerPort, 3000),
 			Dockerfile:    ImageSource{Source: "stock", StockName: "discourse"},
 		}
 		cfg.Images["discourse"] = discourse
@@ -224,6 +225,27 @@ func valueOrDefault(value int, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+// migrateLegacyEmberCLIPort bumps anything still pinned to the historical
+// ember-cli port (4200) up to the Rails default (3000). The old default only
+// made sense when ember-cli was the dev entry point; with Rails serving
+// clients directly it now points at nothing (or, on legacy Discourse, at the
+// proxy we're moving off). An explicit non-default value (e.g. 9292) is
+// preserved.
+func migrateLegacyEmberCLIPort(cfg *Config) {
+	const legacyEmberCLIPort = 4200
+	const newDefault = 3000
+	if cfg.ContainerPort == legacyEmberCLIPort {
+		cfg.ContainerPort = newDefault
+	}
+	if cfg.HostStartingPort == legacyEmberCLIPort {
+		cfg.HostStartingPort = newDefault
+	}
+	if discourse, ok := cfg.Images["discourse"]; ok && discourse.ContainerPort == legacyEmberCLIPort {
+		discourse.ContainerPort = newDefault
+		cfg.Images["discourse"] = discourse
+	}
 }
 
 func DefaultCopyRules() []CopyRule {

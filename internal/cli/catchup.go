@@ -108,11 +108,11 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 func buildCatchupScript(workdir string, plugins []string) string {
 	lines := []string{
 		"set -euo pipefail",
-		"cleanup() { echo 'Restarting services: pitchfork and ember-cli'; sudo /usr/bin/sv start pitchfork || sudo sv start pitchfork || true; sudo /usr/bin/sv start ember-cli || sudo sv start ember-cli || true; }",
+		"cleanup() { echo 'Restarting services: rails and ember'; sudo /usr/bin/sv start rails || sudo sv start rails || true; sudo /usr/bin/sv start ember || sudo sv start ember || true; }",
 		"trap cleanup EXIT",
 		"",
-		"sudo /usr/bin/sv force-stop pitchfork || sudo sv force-stop pitchfork || true",
-		"sudo /usr/bin/sv force-stop ember-cli || sudo sv force-stop ember-cli || true",
+		"sudo /usr/bin/sv force-stop rails || sudo sv force-stop rails || true",
+		"sudo /usr/bin/sv force-stop ember || sudo sv force-stop ember || true",
 		"",
 		"echo '==> Resetting core...'",
 		"git reset --hard",

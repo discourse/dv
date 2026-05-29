@@ -55,8 +55,8 @@ var stopDiscourseCmd = &cobra.Command{
 		stopScript := `set -e
 has_service() { [ -d "/etc/service/$1" ]; }
 if has_service sidekiq; then sv force-stop sidekiq || true; fi
-if has_service pitchfork; then sv force-stop pitchfork || true; fi
-if has_service ember-cli; then sv force-stop ember-cli || true; fi
+if has_service rails; then sv force-stop rails || true; fi
+if has_service ember; then sv force-stop ember || true; fi
 if has_service caddy; then sv force-stop caddy || true; fi
 sleep 1`
 		if _, err := docker.ExecAsRoot(name, workdir, nil, []string{"bash", "-lc", stopScript}); err != nil {
@@ -66,7 +66,7 @@ sleep 1`
 		fmt.Fprintf(cmd.OutOrStdout(), "Service status:\n")
 		statusScript := `set -e
 services=()
-for s in sidekiq pitchfork ember-cli caddy; do
+for s in sidekiq rails ember caddy; do
   [ -d "/etc/service/$s" ] && services+=("$s")
 done
 if [ ${#services[@]} -gt 0 ]; then

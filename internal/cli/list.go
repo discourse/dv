@@ -189,9 +189,9 @@ func init() {
 // returns clickable http://localhost:<port> URLs.
 // Examples of input formats handled:
 //
-//	"0.0.0.0:4201->4200/tcp, :::4201->4200/tcp"
+//	"0.0.0.0:3001->3000/tcp, :::3001->3000/tcp"
 //	"127.0.0.1:8080->8080/tcp"
-//	"4200/tcp" (no published ports)
+//	"3000/tcp" (no published ports)
 func parseHostPortURLs(portsField string) []string {
 	portsField = strings.TrimSpace(portsField)
 	if portsField == "" {
@@ -209,11 +209,11 @@ func parseHostPortURLs(portsField string) []string {
 		// Look for the left side before "->" which contains host ip:port
 		arrowIdx := strings.Index(seg, "->")
 		if arrowIdx == -1 {
-			// Not a published mapping (e.g., "4200/tcp")
+			// Not a published mapping (e.g., "3000/tcp")
 			continue
 		}
 		left := strings.TrimSpace(seg[:arrowIdx])
-		// left may be like "0.0.0.0:4201" or ":::4201" or "127.0.0.1:4201"
+		// left may be like "0.0.0.0:3001" or ":::3001" or "127.0.0.1:3001"
 		colonIdx := strings.LastIndex(left, ":")
 		if colonIdx == -1 || colonIdx+1 >= len(left) {
 			continue

@@ -752,16 +752,16 @@ exec chpst -u discourse:discourse -U discourse:discourse ruby "$WATCHER_BIN"
 }
 
 func resolveInternalDiscourseURL(ctx themeCommandContext) (string, error) {
-	out, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, nil, []string{"bash", "-lc", "echo -n ${PITCHFORK_PORT:-${UNICORN_PORT:-9292}}"})
+	out, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, nil, []string{"bash", "-lc", "echo -n ${UNICORN_PORT:-3000}"})
 	if err != nil {
 		return "", err
 	}
 	port := strings.TrimSpace(out)
 	if port == "" {
-		port = "9292"
+		port = "3000"
 	}
 	if _, err := strconv.Atoi(port); err != nil {
-		return "", fmt.Errorf("invalid PITCHFORK_PORT/UNICORN_PORT value: %s", port)
+		return "", fmt.Errorf("invalid UNICORN_PORT value: %s", port)
 	}
 	return fmt.Sprintf("http://127.0.0.1:%s", port), nil
 }

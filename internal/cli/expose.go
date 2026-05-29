@@ -222,7 +222,7 @@ func getContainerTarget(name string, cfg config.Config, verbose bool, out io.Wri
 	imgCfg := cfg.Images[cfg.SelectedImage]
 	containerPort := imgCfg.ContainerPort
 	if containerPort == 0 {
-		containerPort = 4200 // fallback default
+		containerPort = 3000 // fallback default (Rails)
 	}
 	if verbose {
 		fmt.Fprintf(out, "[verbose] Container port: %d\n", containerPort)
