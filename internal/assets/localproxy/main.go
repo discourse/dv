@@ -105,6 +105,9 @@ type containerInspect struct {
 		Running bool   `json:"Running"`
 		Status  string `json:"Status"`
 	} `json:"State"`
+	Config struct {
+		Labels map[string]string `json:"Labels"`
+	} `json:"Config"`
 	NetworkSettings struct {
 		Networks map[string]struct {
 			IPAddress string `json:"IPAddress"`
@@ -270,13 +273,28 @@ func (h *routeHealer) healOnce(ctx context.Context, host string) (*url.URL, erro
 		return nil, errContainerNoIP
 	}
 
-	target, err := parseTarget(fmt.Sprintf("http://%s:%d", containerIP, h.containerPort))
+	containerPort := h.containerPort
+	if labelPort := containerPortFromLabels(inspect.Config.Labels); labelPort > 0 {
+		containerPort = labelPort
+	}
+	target, err := parseTarget(fmt.Sprintf("http://%s:%d", containerIP, containerPort))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errAutoHealUnavailable, err)
 	}
 	h.table.set(host, target)
 	log.Printf("auto-healed route %s -> %s", host, target)
 	return target, nil
+}
+
+func containerPortFromLabels(labels map[string]string) int {
+	if len(labels) == 0 {
+		return 0
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(labels["com.dv.local-proxy.container-port"]))
+	if err != nil || port <= 0 {
+		return 0
+	}
+	return port
 }
 
 func firstContainerIP(networks map[string]struct {

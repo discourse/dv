@@ -141,6 +141,36 @@ func TestRouteHealerHealSuccess(t *testing.T) {
 	}
 }
 
+func TestRouteHealerUsesContainerPortLabel(t *testing.T) {
+	info := &containerInspect{}
+	info.State.Running = true
+	info.Config.Labels = map[string]string{
+		"com.dv.local-proxy.container-port": "3000",
+	}
+	info.NetworkSettings.Networks = map[string]struct {
+		IPAddress string `json:"IPAddress"`
+	}{
+		"bridge": {IPAddress: "172.17.0.8"},
+	}
+
+	inspector := &fakeInspector{info: info}
+	table := newProxyTable()
+	// Simulate an older/stale proxy defaulting to the legacy Ember port. The
+	// container label should win so auto-heal cannot poison the route table.
+	healer := newRouteHealer(table, inspector, "home.arpa", 4200, true, time.Second)
+
+	target, err := healer.Heal(context.Background(), "api-key.home.arpa")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if target == nil || target.String() != "http://172.17.0.8:3000" {
+		t.Fatalf("unexpected target: %v", target)
+	}
+	if route := table.lookup("api-key.home.arpa"); route == nil || route.String() != "http://172.17.0.8:3000" {
+		t.Fatalf("expected route from label port, got %v", route)
+	}
+}
+
 func TestRouteHealerContainerNotRunning(t *testing.T) {
 	info := &containerInspect{}
 	info.State.Running = false
