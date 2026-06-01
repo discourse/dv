@@ -50,14 +50,24 @@ func buildDatabaseDropCreateMigrateCommands(opts discourseResetScriptOpts) []str
 		"echo 'Waiting for PostgreSQL to be ready...'",
 		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo 'PostgreSQL did not become ready'; exit 1)",
 		"MIG_LOG_DEV=/tmp/dv-migrate-dev-$(date +%s).log",
-		"MIG_LOG_TEST=/tmp/dv-migrate-test-$(date +%s).log",
+	}
+	if !opts.WithoutTestDB {
+		cmds = append(cmds, "MIG_LOG_TEST=/tmp/dv-migrate-test-$(date +%s).log")
 	}
 
 	if opts.SkipDBReset {
-		cmds = append(cmds, "echo 'Migrating databases (development and test)...'")
+		if opts.WithoutTestDB {
+			cmds = append(cmds, "echo 'Migrating development database...'")
+		} else {
+			cmds = append(cmds, "echo 'Migrating databases (development and test)...'")
+		}
 	} else {
+		if opts.WithoutTestDB {
+			cmds = append(cmds, "echo 'Resetting and migrating development database...'")
+		} else {
+			cmds = append(cmds, "echo 'Resetting and migrating databases (development and test)...'")
+		}
 		cmds = append(cmds,
-			"echo 'Resetting and migrating databases (development and test)...'",
 			"(bin/rake db:drop || true)",
 			"bin/rake db:create",
 		)
@@ -66,8 +76,14 @@ func buildDatabaseDropCreateMigrateCommands(opts discourseResetScriptOpts) []str
 	cmds = append(cmds,
 		"echo \"Migrating dev DB (output -> $MIG_LOG_DEV)\"",
 		"bin/rake db:migrate > \"$MIG_LOG_DEV\" 2>&1",
-		"echo \"Migrating test DB (output -> $MIG_LOG_TEST)\"",
-		"RAILS_ENV=test bin/rake db:migrate > \"$MIG_LOG_TEST\" 2>&1",
+	)
+	if !opts.WithoutTestDB {
+		cmds = append(cmds,
+			"echo \"Migrating test DB (output -> $MIG_LOG_TEST)\"",
+			"RAILS_ENV=test bin/rake db:migrate > \"$MIG_LOG_TEST\" 2>&1",
+		)
+	}
+	cmds = append(cmds,
 		"bundle",
 		"pnpm install",
 	)
@@ -84,16 +100,19 @@ func buildDatabaseDropCreateMigrateCommands(opts discourseResetScriptOpts) []str
 	cmds = append(cmds,
 		"echo 'Migration logs:'",
 		"echo \"  dev : $MIG_LOG_DEV\"",
-		"echo \"  test: $MIG_LOG_TEST\"",
-		"echo 'Done.'",
 	)
+	if !opts.WithoutTestDB {
+		cmds = append(cmds, "echo \"  test: $MIG_LOG_TEST\"")
+	}
+	cmds = append(cmds, "echo 'Done.'")
 
 	return cmds
 }
 
 // discourseResetScriptOpts configures buildDiscourseResetScript.
 type discourseResetScriptOpts struct {
-	SkipDBReset bool // if true, only migrate databases, do not drop or create them
+	SkipDBReset   bool // if true, only migrate databases, do not drop or create them
+	WithoutTestDB bool // if true, skip test database migration
 }
 
 // buildDiscourseResetScript generates a shell script that performs common

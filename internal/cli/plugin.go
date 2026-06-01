@@ -72,7 +72,7 @@ PLUGIN accepts:
 			}
 
 			if !skipMaintenance {
-				if err := runMaintenance(cmd, ctx.name, ctx.workdir, envs); err != nil {
+				if err := runMaintenance(cmd, ctx.name, ctx.workdir, envs, false); err != nil {
 					return err
 				}
 			}

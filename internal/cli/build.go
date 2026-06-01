@@ -71,14 +71,18 @@ var buildCmd = &cobra.Command{
 		removeExisting, _ := cmd.Flags().GetBool("rm-existing")
 		overrideTag, _ := cmd.Flags().GetString("tag")
 		disableBuildKit, _ := cmd.Flags().GetBool("classic-build")
+		withoutTestDB, _ := cmd.Flags().GetBool("without-test-db")
 		builderName, _ := cmd.Flags().GetString("builder")
 
-		pass := make([]string, 0, len(buildArgs)+1)
+		pass := make([]string, 0, len(buildArgs)+3)
 		if noCache {
 			pass = append(pass, "--no-cache")
 		}
 		for _, kv := range buildArgs {
 			pass = append(pass, "--build-arg", kv)
+		}
+		if withoutTestDB {
+			pass = append(pass, "--build-arg", "WITHOUT_TEST_DB=1")
 		}
 
 		if removeExisting && docker.Exists(cfg.DefaultContainer) {
@@ -171,5 +175,6 @@ func init() {
 	buildCmd.Flags().Bool("rm-existing", false, "Remove existing default container before building")
 	buildCmd.Flags().String("tag", "", "Override the Docker image tag for this build")
 	buildCmd.Flags().Bool("classic-build", false, "Use legacy 'docker build' instead of buildx/BuildKit helpers")
+	buildCmd.Flags().Bool("without-test-db", false, "Skip test database migration when building the image")
 	buildCmd.Flags().String("builder", "", "Specify a buildx builder (default: Docker's current builder)")
 }

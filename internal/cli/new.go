@@ -185,6 +185,8 @@ var newCmd = &cobra.Command{
 		}
 
 		// Apply template-specific config changes before saving
+		withoutTestDB, _ := cmd.Flags().GetBool("without-test-db")
+
 		if tpl != nil {
 			// Add copy rules
 			for _, rule := range tpl.Copy {
@@ -243,7 +245,7 @@ var newCmd = &cobra.Command{
 				tpl.Discourse.Branch = branchFlag
 			}
 
-			if err = executeTemplate(cmd, cfg, name, workdir, tpl, sshAuthSock, verbose); err != nil {
+			if err = executeTemplate(cmd, cfg, name, workdir, tpl, sshAuthSock, verbose, withoutTestDB); err != nil {
 				return err
 			}
 		}
@@ -263,7 +265,7 @@ func confirmInvalidRailsHostname(cmd *cobra.Command, name string) (bool, error) 
 	return promptYesNo(cmd.InOrStdin(), errOut, "Continue anyway? (y/N): ")
 }
 
-func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prNumber int, envs docker.Envs) error {
+func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prNumber int, envs docker.Envs, withoutTestDB bool) error {
 	owner, repo := prSearchOwnerRepoFromContainer(cfg, name)
 	if owner == "" || repo == "" {
 		owner, repo = ownerRepoFromURL(cfg.DiscourseRepo)
@@ -277,7 +279,7 @@ func checkoutPR(cmd *cobra.Command, cfg config.Config, name, workdir string, prN
 	}
 	branchName := prDetail.Head.Ref
 	checkoutCmds := buildPRCheckoutCommands(prNumber, branchName)
-	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{})
+	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{WithoutTestDB: withoutTestDB})
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 
@@ -311,7 +313,7 @@ git reset --hard "origin/$_branch"
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 
-func checkoutBranch(cmd *cobra.Command, cfg config.Config, name, workdir, branchName string, envs docker.Envs) error {
+func checkoutBranch(cmd *cobra.Command, cfg config.Config, name, workdir, branchName string, envs docker.Envs, withoutTestDB bool) error {
 	if branchName == "main" || branchName == "master" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s branch...\n", branchName)
 		assetClobberCmds := strings.Join(buildAssetsClobberCommands(), "\n")
@@ -326,7 +328,7 @@ git pull > /tmp/dv-git-pull.log 2>&1
 		return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 	}
 	checkoutCmds := buildBranchCheckoutCommands(branchName)
-	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{})
+	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{WithoutTestDB: withoutTestDB})
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 
@@ -341,33 +343,46 @@ func uniqueAgentName(base string) string {
 	return name
 }
 
-func runMaintenance(cmd *cobra.Command, name, workdir string, envList docker.Envs) error {
+func runMaintenance(cmd *cobra.Command, name, workdir string, envList docker.Envs, withoutTestDB bool) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "Running maintenance (bundle, migrate)...\n")
-	script := `
-set -e
-trap 'echo "Error occurred. Check $FAILED_LOG inside the container for details."; exit 1' ERR
-
-echo "Bundling..."
-FAILED_LOG=/tmp/dv-bundle.log
-bundle install > $FAILED_LOG 2>&1
-
-echo "Waiting for PostgreSQL to be ready..."
-timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo "PostgreSQL did not become ready"; exit 1)
-
-echo "Migrating dev..."
-FAILED_LOG=/tmp/dv-migrate-dev.log
-bin/rake db:migrate > $FAILED_LOG 2>&1
-
-echo "Migrating test..."
-FAILED_LOG=/tmp/dv-migrate-test.log
-RAILS_ENV=test bin/rake db:migrate > $FAILED_LOG 2>&1
-
-echo "Maintenance successful."
-`
+	script := buildMaintenanceScript(withoutTestDB)
 	return docker.ExecInteractive(name, workdir, envList, []string{"bash", "-lc", script})
 }
 
-func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string, tpl *templateConfig, sshAuthSock string, verbose bool) (err error) {
+func buildMaintenanceScript(withoutTestDB bool) string {
+	lines := []string{
+		"set -e",
+		"trap 'echo \"Error occurred. Check $FAILED_LOG inside the container for details.\"; exit 1' ERR",
+		"",
+		"echo \"Bundling...\"",
+		"FAILED_LOG=/tmp/dv-bundle.log",
+		"bundle install > $FAILED_LOG 2>&1",
+		"",
+		"echo \"Waiting for PostgreSQL to be ready...\"",
+		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo \"PostgreSQL did not become ready\"; exit 1)",
+		"",
+		"echo \"Migrating dev...\"",
+		"FAILED_LOG=/tmp/dv-migrate-dev.log",
+		"bin/rake db:migrate > $FAILED_LOG 2>&1",
+	}
+
+	if !withoutTestDB {
+		lines = append(lines,
+			"",
+			"echo \"Migrating test...\"",
+			"FAILED_LOG=/tmp/dv-migrate-test.log",
+			"RAILS_ENV=test bin/rake db:migrate > $FAILED_LOG 2>&1",
+		)
+	}
+
+	lines = append(lines,
+		"",
+		"echo \"Maintenance successful.\"",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string, tpl *templateConfig, sshAuthSock string, verbose bool, withoutTestDB bool) (err error) {
 	// 1. Env variables
 	envList := collectEnvPassthrough(cfg)
 	if len(tpl.Env) > 0 {
@@ -396,7 +411,7 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 	}
 	if tpl.Discourse.PR != 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Checking out PR %d...\n", tpl.Discourse.PR)
-		if err := checkoutPR(cmd, cfg, name, workdir, tpl.Discourse.PR, envList); err != nil {
+		if err := checkoutPR(cmd, cfg, name, workdir, tpl.Discourse.PR, envList, withoutTestDB); err != nil {
 			return err
 		}
 	} else if tpl.Discourse.Branch != "" {
@@ -406,7 +421,7 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 			}
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Checking out branch %s...\n", tpl.Discourse.Branch)
-			if err := checkoutBranch(cmd, cfg, name, workdir, tpl.Discourse.Branch, envList); err != nil {
+			if err := checkoutBranch(cmd, cfg, name, workdir, tpl.Discourse.Branch, envList, withoutTestDB); err != nil {
 				return err
 			}
 		}
@@ -444,7 +459,7 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 
 	// 5. Maintenance (Bundle and Migrate)
 	// Now that core is foundation-ed and plugins are cloned, we bundle and migrate.
-	if err := runMaintenance(cmd, name, workdir, envList); err != nil {
+	if err := runMaintenance(cmd, name, workdir, envList, withoutTestDB); err != nil {
 		return err
 	}
 
@@ -571,6 +586,7 @@ func init() {
 	newCmd.Flags().String("pr", "", "PR number or search query to checkout")
 	newCmd.Flags().String("branch", "", "Branch to checkout")
 	newCmd.Flags().StringArray("plugin", nil, "Clone plugin into the new agent (NAME, OWNER/REPO, or git URL; repeatable)")
+	newCmd.Flags().Bool("without-test-db", false, "Skip test database migration during provisioning")
 
 	newCmd.RegisterFlagCompletionFunc("pr", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		configDir, err := xdg.ConfigDir()
