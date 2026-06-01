@@ -53,9 +53,9 @@ func TestClassifySession(t *testing.T) {
 			want:    "agent: codex",
 		},
 		{
-			name:    "aider agent",
+			name:    "unknown former agent",
 			command: "aider --yes-always --message fix it",
-			want:    "agent: aider",
+			want:    "process",
 		},
 		{
 			name:    "cursor agent",
@@ -63,9 +63,9 @@ func TestClassifySession(t *testing.T) {
 			want:    "process",
 		},
 		{
-			name:    "gemini agent",
+			name:    "unknown former agent",
 			command: "gemini -y -p do things",
-			want:    "agent: gemini",
+			want:    "process",
 		},
 		{
 			name:    "unknown process",

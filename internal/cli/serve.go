@@ -662,13 +662,12 @@ func handleContainerRunAgent(w http.ResponseWriter, r *http.Request, configDir, 
 		writeJSON(w, http.StatusBadRequest, "agent required")
 		return
 	}
-	agent = resolveAgentAlias(agent)
-
 	cfg, err := config.LoadOrCreate(configDir)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	agent = resolveAgentAliasWithConfig(cfg, agent)
 	ctx, err := ensureContainerExecContext(configDir, name)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, err.Error())
@@ -680,15 +679,15 @@ func handleContainerRunAgent(w http.ResponseWriter, r *http.Request, configDir, 
 	cmdStub.SetOut(io.Discard)
 	cmdStub.SetErr(io.Discard)
 	copyConfiguredFiles(cmdStub, cfg, name, workdir, agent)
-	envs := buildAgentEnv(cfg, agent, cmdStub)
+	envs := buildAgentEnv(cfg, agent)
 
 	var argv []string
 	if len(req.RawArgs) > 0 {
-		argv = append([]string{agent}, req.RawArgs...)
+		argv = buildAgentRawWithConfig(cfg, agent, req.RawArgs)
 	} else if strings.TrimSpace(req.Prompt) == "" {
-		argv = buildAgentInteractive(agent)
+		argv = buildAgentInteractiveWithConfig(cfg, agent)
 	} else {
-		argv = buildAgentArgs(agent, req.Prompt)
+		argv = buildAgentArgsWithConfig(cfg, agent, req.Prompt)
 	}
 
 	shellCmd := withUserPaths(shellJoin(argv))
@@ -869,19 +868,10 @@ func handleContainerUpdateAgents(w http.ResponseWriter, r *http.Request, configD
 		workdir = "/var/www/discourse"
 	}
 
-	steps := []agentUpdateStep{
-		{label: "OpenAI Codex CLI", command: "npm install -g @openai/codex", runAsRoot: true},
-		{label: "Google Gemini CLI", command: "npm install -g @google/gemini-cli", runAsRoot: true},
-		{label: "Crush CLI", command: "npm install -g @charmland/crush", runAsRoot: true},
-		{label: "Github CLI", command: "npm install -g @github/copilot", runAsRoot: true},
-		{label: "OpenCode AI", command: "npm install -g opencode-ai@latest", runAsRoot: true},
-		{label: "Amp CLI", command: "npm install -g @sourcegraph/amp", runAsRoot: true},
-		{label: "Claude CLI", command: "curl -fsSL https://claude.ai/install.sh | bash", useUserPaths: true},
-		{label: "Aider", command: "curl -LsSf https://aider.chat/install.sh | sh", useUserPaths: true},
-		{label: "Cursor Agent", command: "curl -fsS https://cursor.com/install | bash", useUserPaths: true},
-		{label: "Factory Droid", command: "curl -fsSL https://app.factory.ai/cli | sh", useUserPaths: true},
-		{label: "Mistral Vibe", command: "curl -LsSf https://mistral.ai/vibe/install.sh | bash", useUserPaths: true},
-		{label: "Term-LLM", command: "command -v term-llm >/dev/null && term-llm upgrade || echo 'term-llm not installed, skipping'", useUserPaths: true},
+	steps, _, err := resolveAgentUpdateSteps(cfg, "")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	streamSequence(w, func(sse *sseWriter) error {

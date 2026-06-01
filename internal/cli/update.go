@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -43,16 +44,16 @@ var updateAgentCmd = &cobra.Command{
 }
 
 func runAgentUpdates(cmd *cobra.Command, agent string) error {
-	steps, agentName, err := resolveAgentUpdateSteps(agent)
-	if err != nil {
-		return err
-	}
-
 	configDir, err := xdg.ConfigDir()
 	if err != nil {
 		return err
 	}
 	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		return err
+	}
+
+	steps, agentName, err := resolveAgentUpdateSteps(cfg, agent)
 	if err != nil {
 		return err
 	}
@@ -192,23 +193,39 @@ type agentUpdateStep struct {
 
 var agentUpdateSteps = []agentUpdateStep{
 	{name: "codex", label: "OpenAI Codex CLI", command: "npm install -g @openai/codex", runAsRoot: true},
-	{name: "gemini", label: "Google Gemini CLI", command: "npm install -g @google/gemini-cli", runAsRoot: true},
-	{name: "crush", label: "Crush CLI", command: "npm install -g @charmland/crush", runAsRoot: true},
 	{name: "copilot", aliases: []string{"github"}, label: "Github CLI", command: "npm install -g @github/copilot", runAsRoot: true},
 	{name: "opencode", label: "OpenCode AI", command: "npm install -g opencode-ai@latest", runAsRoot: true},
-	{name: "amp", label: "Amp CLI", command: "npm install -g @sourcegraph/amp", runAsRoot: true},
 	{name: "claude", label: "Claude CLI", command: "curl -fsSL https://claude.ai/install.sh | bash", useUserPaths: true},
-	{name: "aider", label: "Aider", command: "curl -LsSf https://aider.chat/install.sh | sh", useUserPaths: true},
 	{name: "cursor", aliases: []string{"cursor-agent"}, label: "Cursor Agent", command: "curl -fsS https://cursor.com/install | bash", useUserPaths: true},
 	{name: "droid", aliases: []string{"factory", "factory-droid"}, label: "Factory Droid", command: "curl -fsSL https://app.factory.ai/cli | sh", useUserPaths: true},
 	{name: "vibe", aliases: []string{"mistral", "mistral-vibe"}, label: "Mistral Vibe", command: "curl -LsSf https://mistral.ai/vibe/install.sh | bash", useUserPaths: true},
 	{name: "term-llm", aliases: []string{"tl"}, label: "Term-LLM", command: "command -v term-llm >/dev/null && term-llm upgrade || echo 'term-llm not installed, skipping'", useUserPaths: true},
 }
 
-func resolveAgentUpdateSteps(agent string) ([]agentUpdateStep, string, error) {
+func resolveAgentUpdateSteps(cfg config.Config, agent string) ([]agentUpdateStep, string, error) {
 	agent = strings.ToLower(strings.TrimSpace(agent))
 	if agent == "" {
-		return agentUpdateSteps, "", nil
+		steps := make([]agentUpdateStep, 0, len(agentUpdateSteps)+len(cfg.Agents))
+		usedCustom := make(map[string]struct{})
+		for _, builtin := range agentUpdateSteps {
+			if custom, ok := customAgentUpdateStepByName(cfg, builtin.name); ok {
+				steps = append(steps, custom)
+				usedCustom[custom.name] = struct{}{}
+				continue
+			}
+			steps = append(steps, builtin)
+		}
+		for _, custom := range customAgentUpdateSteps(cfg) {
+			if _, ok := usedCustom[custom.name]; ok {
+				continue
+			}
+			steps = append(steps, custom)
+		}
+		return steps, "", nil
+	}
+
+	if step, ok := customAgentUpdateStep(cfg, agent); ok {
+		return []agentUpdateStep{step}, step.name, nil
 	}
 
 	for _, step := range agentUpdateSteps {
@@ -222,29 +239,134 @@ func resolveAgentUpdateSteps(agent string) ([]agentUpdateStep, string, error) {
 		}
 	}
 
-	return nil, "", fmt.Errorf("unknown agent %q; expected one of: %s", agent, strings.Join(agentUpdateNames(), ", "))
+	return nil, "", fmt.Errorf("unknown agent %q; expected one of: %s", agent, strings.Join(agentUpdateNames(cfg), ", "))
 }
 
-func agentUpdateNames() []string {
-	names := make([]string, 0, len(agentUpdateSteps))
-	for _, step := range agentUpdateSteps {
-		names = append(names, step.name)
+func customAgentUpdateSteps(cfg config.Config) []agentUpdateStep {
+	steps := make([]agentUpdateStep, 0, len(cfg.Agents))
+	for _, name := range sortedCustomAgentNames(cfg) {
+		if step, ok := customAgentUpdateStepByName(cfg, name); ok {
+			steps = append(steps, step)
+		}
 	}
+	return steps
+}
+
+func customAgentUpdateStepByName(cfg config.Config, name string) (agentUpdateStep, bool) {
+	custom, ok := customAgentConfig(cfg, strings.ToLower(strings.TrimSpace(name)))
+	if !ok {
+		return agentUpdateStep{}, false
+	}
+	return buildCustomAgentUpdateStep(strings.ToLower(strings.TrimSpace(name)), custom)
+}
+
+func customAgentUpdateStep(cfg config.Config, agent string) (agentUpdateStep, bool) {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	for _, name := range sortedCustomAgentNames(cfg) {
+		custom := cfg.Agents[name]
+		canonical := strings.ToLower(strings.TrimSpace(name))
+		if canonical == "" {
+			continue
+		}
+		matched := agent == canonical
+		if !matched {
+			for _, alias := range custom.Aliases {
+				if agent == strings.ToLower(strings.TrimSpace(alias)) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			continue
+		}
+
+		return buildCustomAgentUpdateStep(canonical, custom)
+	}
+	return agentUpdateStep{}, false
+}
+
+func buildCustomAgentUpdateStep(canonical string, custom config.AgentConfig) (agentUpdateStep, bool) {
+	updateCommand := strings.TrimSpace(custom.Update)
+	runAsRoot := custom.UpdateAsRoot
+	if updateCommand == "" {
+		updateCommand = strings.TrimSpace(custom.Install)
+		runAsRoot = custom.InstallAsRoot
+	}
+	if updateCommand == "" {
+		return agentUpdateStep{}, false
+	}
+	return agentUpdateStep{
+		name:         canonical,
+		aliases:      custom.Aliases,
+		label:        canonical,
+		command:      updateCommand,
+		runAsRoot:    runAsRoot,
+		useUserPaths: true,
+	}, true
+}
+
+func agentUpdateNames(cfg config.Config) []string {
+	seen := make(map[string]struct{}, len(agentUpdateSteps)+len(cfg.Agents))
+	for _, step := range agentUpdateSteps {
+		seen[step.name] = struct{}{}
+	}
+	for _, name := range sortedCustomAgentNames(cfg) {
+		custom := cfg.Agents[name]
+		step, ok := customAgentUpdateStepByName(cfg, name)
+		if !ok {
+			continue
+		}
+		seen[step.name] = struct{}{}
+		for _, alias := range custom.Aliases {
+			alias = strings.ToLower(strings.TrimSpace(alias))
+			if alias != "" {
+				seen[alias] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	return names
 }
 
 func completeAgentUpdateNames(toComplete string) []string {
+	var cfg config.Config
+	if configDir, err := xdg.ConfigDir(); err == nil {
+		cfg, _ = config.LoadOrCreate(configDir)
+	}
 	pref := strings.ToLower(strings.TrimSpace(toComplete))
-	var out []string
+	seen := make(map[string]struct{})
 	for _, step := range agentUpdateSteps {
 		candidates := append([]string{step.name}, step.aliases...)
 		for _, candidate := range candidates {
 			candidate = strings.ToLower(candidate)
 			if pref == "" || strings.HasPrefix(candidate, pref) {
-				out = append(out, candidate)
+				seen[candidate] = struct{}{}
 			}
 		}
 	}
+	for _, name := range sortedCustomAgentNames(cfg) {
+		custom := cfg.Agents[name]
+		if _, ok := customAgentUpdateStepByName(cfg, name); !ok {
+			continue
+		}
+		candidates := append([]string{strings.ToLower(strings.TrimSpace(name))}, custom.Aliases...)
+		for _, candidate := range candidates {
+			candidate = strings.ToLower(strings.TrimSpace(candidate))
+			if candidate != "" && (pref == "" || strings.HasPrefix(candidate, pref)) {
+				seen[candidate] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for candidate := range seen {
+		out = append(out, candidate)
+	}
+	sort.Strings(out)
 	return out
 }
 

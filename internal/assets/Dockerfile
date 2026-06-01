@@ -13,14 +13,9 @@ RUN sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && bundle'
 RUN sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && pnpm install'
 
 RUN npm i -g @openai/codex
-RUN npm i -g @google/gemini-cli
-RUN npm i -g @charmland/crush
 RUN npm i -g opencode-ai@latest
-RUN npm i -g @sourcegraph/amp
 RUN npm i -g @github/copilot
-RUN npm i -g @musistudio/claude-code-router
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
-RUN sudo -H -u discourse /bin/bash -lc 'curl -LsSf https://aider.chat/install.sh | sh'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsS https://cursor.com/install | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -LsSf https://mistral.ai/vibe/install.sh | bash'

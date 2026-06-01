@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	textarea "charm.land/bubbles/v2/textarea"
@@ -32,10 +33,13 @@ var runAgentCmd = &cobra.Command{
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		// First arg: agent name completion
 		if len(args) == 0 {
-			// Use precomputed alias map (already deduped)
+			var cfg config.Config
+			if configDir, err := xdg.ConfigDir(); err == nil {
+				cfg, _ = config.LoadOrCreate(configDir)
+			}
 			var out []string
 			pref := strings.ToLower(strings.TrimSpace(toComplete))
-			for name := range agentAliasMap {
+			for _, name := range agentCompletionNames(cfg) {
 				if pref == "" || strings.HasPrefix(name, pref) {
 					out = append(out, name)
 				}
@@ -124,13 +128,13 @@ var runAgentCmd = &cobra.Command{
 		workdir := config.EffectiveWorkdir(cfg, imgCfg, name)
 
 		// Parse args: first token is the agent name (resolve aliases, returns lowercase)
-		agent := resolveAgentAlias(args[0])
+		agent := resolveAgentAliasWithConfig(cfg, args[0])
 
 		// Copy configured files (auth, etc.) into the container as in `enter`,
 		// but scoped to the requested agent when configured.
 		copyConfiguredFiles(cmd, cfg, name, workdir, agent)
 
-		envs := buildAgentEnv(cfg, agent, cmd)
+		envs := buildAgentEnv(cfg, agent)
 
 		rawArgs := []string{}
 		rest := args[1:]
@@ -185,7 +189,7 @@ var runAgentCmd = &cobra.Command{
 		var argv []string
 		switch {
 		case len(rawArgs) > 0:
-			argv = append([]string{agent}, rawArgs...)
+			argv = buildAgentRawWithConfig(cfg, agent, rawArgs)
 			// If this is a pure help request, capture output via non-TTY exec
 			if isHelpArgs(rawArgs) {
 				shellCmd := withUserPaths(shellJoin(argv))
@@ -199,14 +203,14 @@ var runAgentCmd = &cobra.Command{
 			}
 		case promptFromFile != "":
 			// Prompt from file -> construct one-shot invocation with implicit bypass flags
-			argv = buildAgentArgs(agent, promptFromFile)
+			argv = buildAgentArgsWithConfig(cfg, agent, promptFromFile)
 		case len(rest) == 0:
 			// No prompt provided -> run interactively with implicit bypass flags
-			argv = buildAgentInteractive(agent)
+			argv = buildAgentInteractiveWithConfig(cfg, agent)
 		default:
 			// Prompt provided -> construct one-shot invocation with implicit bypass flags
 			prompt := strings.Join(rest, " ")
-			argv = buildAgentArgs(agent, prompt)
+			argv = buildAgentArgsWithConfig(cfg, agent, prompt)
 		}
 
 		// Execute inside container through a login shell to pick up PATH/rc files
@@ -246,30 +250,14 @@ func collectPromptInteractive(cmd *cobra.Command) (string, error) {
 	return strings.TrimSpace(pm.ta.Value()), nil
 }
 
-func buildAgentEnv(cfg config.Config, agent string, cmd *cobra.Command) docker.Envs {
-	if agent == "ccr" {
-		envs := make(docker.Envs, 0, 4)
-		if _, ok := os.LookupEnv("TERM"); ok {
-			envs = append(envs, "TERM")
-		}
-		if _, ok := os.LookupEnv("COLORTERM"); ok {
-			envs = append(envs, "COLORTERM")
-		}
-		if _, ok := os.LookupEnv("OPENROUTER_API_KEY"); ok {
-			envs = append(envs, "OPENROUTER_API_KEY")
-		} else {
-			fmt.Fprintln(cmd.ErrOrStderr(), "Warning: OPENROUTER_API_KEY is not set on host; CCR may fail to authenticate.")
-		}
-		if _, ok := os.LookupEnv("OPENROUTER_KEY"); ok {
-			envs = append(envs, "OPENROUTER_KEY")
-		}
-		return envs
-	}
-
+func buildAgentEnv(cfg config.Config, agent string) docker.Envs {
 	envs := collectEnvPassthrough(cfg)
 
 	if rule, ok := agentRules[agent]; ok {
 		envs = append(envs, rule.env...)
+	}
+	if custom, ok := customAgentConfig(cfg, agent); ok {
+		envs = append(envs, custom.Env...)
 	}
 
 	// Pass through terminal capability variables for proper color support
@@ -292,6 +280,13 @@ func buildAgentEnv(cfg config.Config, agent string, cmd *cobra.Command) docker.E
 // buildAgentArgs uses internal, hard-coded rules per agent to construct argv.
 // If the agent is unknown, falls back to positional prompt.
 func buildAgentArgs(agent string, prompt string) []string {
+	return buildAgentArgsWithConfig(config.Config{}, agent, prompt)
+}
+
+func buildAgentArgsWithConfig(cfg config.Config, agent string, prompt string) []string {
+	if custom, ok := customAgentConfig(cfg, agent); ok {
+		return buildCustomAgentArgs(agent, custom, prompt)
+	}
 	if rule, ok := agentRules[strings.ToLower(agent)]; ok {
 		base := rule.withPrompt(prompt)
 		if len(rule.defaults) > 0 {
@@ -303,6 +298,19 @@ func buildAgentArgs(agent string, prompt string) []string {
 }
 
 func buildAgentInteractive(agent string) []string {
+	return buildAgentInteractiveWithConfig(config.Config{}, agent)
+}
+
+func buildAgentInteractiveWithConfig(cfg config.Config, agent string) []string {
+	if custom, ok := customAgentConfig(cfg, agent); ok {
+		cmd := custom.Command
+		if strings.TrimSpace(cmd) == "" {
+			cmd = agent
+		}
+		argv := append([]string{cmd}, custom.Args...)
+		argv = append(argv, custom.InteractiveArgs...)
+		return argv
+	}
 	if rule, ok := agentRules[strings.ToLower(agent)]; ok {
 		baseBuilder := rule.withoutPrompt
 		if baseBuilder == nil {
@@ -315,6 +323,30 @@ func buildAgentInteractive(agent string) []string {
 		return base
 	}
 	return []string{agent}
+}
+
+func buildCustomAgentArgs(agent string, custom config.AgentConfig, prompt string) []string {
+	cmd := strings.TrimSpace(custom.Command)
+	if cmd == "" {
+		cmd = agent
+	}
+	argv := append([]string{cmd}, custom.Args...)
+	argv = append(argv, custom.PromptArgs...)
+	argv = append(argv, prompt)
+	return argv
+}
+
+func buildAgentRawWithConfig(cfg config.Config, agent string, rawArgs []string) []string {
+	if custom, ok := customAgentConfig(cfg, agent); ok {
+		cmd := strings.TrimSpace(custom.Command)
+		if cmd == "" {
+			cmd = agent
+		}
+		argv := append([]string{cmd}, custom.Args...)
+		argv = append(argv, rawArgs...)
+		return argv
+	}
+	return append([]string{agent}, rawArgs...)
 }
 
 func injectDefaults(argv []string, defaults []string) []string {
@@ -344,45 +376,15 @@ var agentRules = map[string]agentRule{
 		withPrompt:  func(p string) []string { return []string{"cursor-agent", "-p", p} },
 		defaults:    []string{"-f"},
 	},
-	"ccr": {
-		interactive: func() []string {
-			return []string{"bash", "-c", "ccr stop 2>/dev/null || true; ccr code --dangerously-skip-permissions"}
-		},
-		withPrompt: func(p string) []string {
-			return []string{"bash", "-c", "ccr stop 2>/dev/null || true; ccr code --dangerously-skip-permissions"}
-		},
-		defaults: []string{},
-	},
 	"codex": {
 		interactive: func() []string { return []string{"codex"} },
 		withPrompt:  func(p string) []string { return []string{"codex", "exec", "-s", "danger-full-access", p} },
 		defaults:    []string{"--search", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access", "-c", "model_reasoning_effort=xhigh", "-m", "gpt-5.4"},
 	},
-	"aider": {
-		interactive: func() []string { return []string{"aider"} },
-		withPrompt:  func(p string) []string { return []string{"aider", "--message", p} },
-		defaults:    []string{"--yes-always"},
-	},
 	"claude": {
 		interactive: func() []string { return []string{"claude"} },
 		withPrompt:  func(p string) []string { return []string{"claude", "-p", p} },
 		defaults:    []string{"--dangerously-skip-permissions", "--model", "opus", "--effort", "high"},
-	},
-	"gemini": {
-		interactive: func() []string { return []string{"gemini"} },
-		withPrompt:  func(p string) []string { return []string{"gemini", "-p", p} },
-		defaults:    []string{"-y", "--include-directories", "/", "--model", "gemini-3-flash-preview"},
-		env:         []string{"GEMINI_PROMPT_GIT=0"},
-	},
-	"crush": {
-		interactive: func() []string { return []string{"crush"} },
-		withPrompt:  func(p string) []string { return []string{"crush", "--prompt", p} },
-		defaults:    []string{},
-	},
-	"amp": {
-		interactive: func() []string { return []string{"amp"} },
-		withPrompt:  func(p string) []string { return []string{"amp", "-x", p} },
-		defaults:    []string{"--dangerously-allow-all"},
 	},
 	"opencode": {
 		interactive: func() []string { return []string{"opencode"} },
@@ -444,6 +446,75 @@ func resolveAgentAlias(name string) string {
 		return canonical
 	}
 	return lower
+}
+
+func resolveAgentAliasWithConfig(cfg config.Config, name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, customName := range sortedCustomAgentNames(cfg) {
+		custom := cfg.Agents[customName]
+		canonical := strings.ToLower(strings.TrimSpace(customName))
+		if lower == canonical {
+			return canonical
+		}
+		for _, alias := range custom.Aliases {
+			if lower == strings.ToLower(strings.TrimSpace(alias)) {
+				return canonical
+			}
+		}
+	}
+	if canonical, ok := agentAliasMap[lower]; ok {
+		return canonical
+	}
+	return lower
+}
+
+func agentCompletionNames(cfg config.Config) []string {
+	names := make(map[string]struct{}, len(agentAliasMap)+len(cfg.Agents))
+	for name := range agentAliasMap {
+		names[name] = struct{}{}
+	}
+	for _, customName := range sortedCustomAgentNames(cfg) {
+		custom := cfg.Agents[customName]
+		name := strings.ToLower(strings.TrimSpace(customName))
+		if name == "" {
+			continue
+		}
+		names[name] = struct{}{}
+		for _, alias := range custom.Aliases {
+			alias = strings.ToLower(strings.TrimSpace(alias))
+			if alias != "" {
+				names[alias] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func customAgentConfig(cfg config.Config, agent string) (config.AgentConfig, bool) {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	for _, name := range sortedCustomAgentNames(cfg) {
+		custom := cfg.Agents[name]
+		if strings.ToLower(strings.TrimSpace(name)) == agent {
+			return custom, true
+		}
+	}
+	return config.AgentConfig{}, false
+}
+
+func sortedCustomAgentNames(cfg config.Config) []string {
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return strings.ToLower(strings.TrimSpace(names[i])) < strings.ToLower(strings.TrimSpace(names[j]))
+	})
+	return names
 }
 
 // shellJoin and shellQuote are now in shared.go

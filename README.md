@@ -8,7 +8,7 @@ This project provides a containerized development environment that includes:
 - Discourse development setup
 - Essential developer tools (vim, ripgrep)
 - Ready-to-use database configuration, fully migrated dev/test databases
-- Various AI helpers preinstalled in the image (Claude, Codex, Aider, Gemini)
+- Various AI helpers preinstalled in the image (Codex, OpenCode, Copilot, Claude, Cursor, Droid, Vibe, Term-LLM)
 - Multi-agent container management via `dv` top-level commands (`list`, `new`, `select`, `rename`)
 - Plugin bootstrap helpers via `dv new --plugin` and `dv plugin add`
 - Embedded Dockerfile managed by the CLI with safe override mechanisms
@@ -210,11 +210,34 @@ dv ra codex ./prompts/long-instructions.txt
 dv ra codex ~/notes/feature-plan.md
 
 # pass raw args directly to the agent (no prompt wrapping)
-dv ra aider -- --yes -m "Refactor widget"
+dv ra opencode -- --help
 ```
 
+BYO agents can be configured in `~/.config/dv/config.json`:
+
+```json
+{
+  "agents": {
+    "my-agent": {
+      "command": "my-agent-cli",
+      "args": ["run"],
+      "promptArgs": ["--prompt"],
+      "interactiveArgs": ["--interactive"],
+      "aliases": ["ma"],
+      "env": ["MY_AGENT_API_KEY"],
+      "install": "npm install -g my-agent-cli",
+      "update": "npm update -g my-agent-cli",
+      "installAsRoot": true,
+      "updateAsRoot": true
+    }
+  }
+}
+```
+
+Then run `dv ra my-agent Fix the bug` or `dv ra ma`. If `install`/`update` is configured, `dv update agent my-agent` runs `update` (falling back to `install` when `update` is omitted), and `dv update agents` includes it.
+
 Notes:
-- Autocompletes common agents: `codex`, `aider`, `claude`, `gemini`, `crush`, `cursor`, `opencode`, `amp`.
+- Autocompletes bundled agents plus configured BYO agents and aliases: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `droid`, `vibe`, `term-llm` (`tl`).
 - If no prompt is provided, an inline TUI opens for multi-line input (Ctrl+D to run, Esc to cancel).
 - You can pass a regular file path as the first argument after the agent (e.g. `dv ra codex ./plan.md`). The file will be read on the host and its contents used as the prompt. If the argument is not a file, the existing prompt behavior is used.
 - Filename/path completion is supported when you start typing a path (e.g. `./`, `../`, `/`, or include a path separator).
@@ -261,7 +284,7 @@ dv update agent codex --name my-container
 Notes:
 - Starts the container if needed before running updates.
 - Re-runs the official install scripts or package managers to pull the latest versions.
-- Supported single-agent names include `codex`, `gemini`, `crush`, `copilot`, `opencode`, `amp`, `claude`, `aider`, `cursor`, `droid`, `vibe`, and `term-llm`.
+- Supported single-agent names include `codex`, `copilot`, `opencode`, `claude`, `cursor`, `droid`, `vibe`, `term-llm`, and configured BYO agents with an `update` or `install` command.
 
 ### dv remove
 Remove the container and optionally the image.
@@ -500,19 +523,13 @@ Use `dv config site_settings FILENAME.yaml` to apply Discourse site settings fro
 #### Local proxy (NAME.dv.localhost)
 Run `dv config local-proxy` to build and start a small reverse proxy container (`dv-local-proxy` by default) that maps each new agent to `NAME.dv.localhost` instead of host ports like `localhost:3000`. By default, the proxy listens on localhost only (port 80 for HTTP, 2080 for admin API) for security. Use `--hostname dev.home.arpa` to use `NAME.dev.home.arpa` instead, and use `--public` to bind to all network interfaces. Use `--https` to enable HTTPS on port 443 via a local mkcert certificate (HTTP will redirect to HTTPS). The proxy registers containers as you create/start them and injects hostname env vars so Discourse assets resolve correctly; when `--https` is enabled, new stock Discourse containers also configure their in-container Caddy with the proxy hostname/wildcard and trust Caddy's local CA in Chromium's NSS DB. Stop or remove the proxy container to go back to host-port URLs; only containers created while the proxy is running adopt the hostname.
 
-#### Claude Code Router (CCR)
-Use `dv config ccr` to bootstrap Claude Code Router presets via OpenRouter/OpenAI rankings.
-
 #### Copying host files before enter/run-agent
 Use `copyRules` in your config to copy host files into the container. Each rule sets a host path (supports `~`, env vars, and globs) and a container destination, plus optional `agents` to only copy when that agent is run via `dv run-agent`. Unscoped rules run for `dv enter`/`dv run`; agent-scoped rules skip those commands.
 
 ```json
 {
   "copyRules": [
-    { "host": "~/.codex/auth.json",      "container": "/home/discourse/.codex/auth.json",      "agents": ["codex"] },
-    { "host": "~/.gemini/GEMINI.md",     "container": "/home/discourse/.gemini/GEMINI.md",     "agents": ["gemini"] },
-    { "host": "~/.gemini/*.json",        "container": "/home/discourse/.gemini/",              "agents": ["gemini"] },
-    { "host": "~/.gemini/google_account_id",     "container": "/home/discourse/google_account_id",     "agents": ["gemini"] }
+    { "host": "~/.codex/auth.json",      "container": "/home/discourse/.codex/auth.json",      "agents": ["codex"] }
   ]
 }
 ```
@@ -557,7 +574,6 @@ Automatically passed through when set on the host:
 - `CLAUDE_CODE_USE_BEDROCK`
 - `DEEPSEEK_API_KEY`
 - `GEMINI_API_KEY`
-- `AMP_API_KEY`
 - `GH_TOKEN`
 - `OPENROUTER_API_KEY`
 - `FACTORY_API_KEY`

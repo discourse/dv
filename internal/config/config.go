@@ -50,6 +50,36 @@ type Config struct {
 	// CopyRules is the preferred representation of copy mappings with optional
 	// agent scoping.
 	CopyRules []CopyRule `json:"copyRules,omitempty"`
+
+	// Agents defines user-provided run-agent shortcuts. Keys are the names used
+	// with `dv run-agent` / `dv ra`.
+	Agents map[string]AgentConfig `json:"agents,omitempty"`
+}
+
+// AgentConfig describes a BYO agent command for `dv run-agent`.
+type AgentConfig struct {
+	// Command is the executable to run. Defaults to the map key when empty.
+	Command string `json:"command,omitempty"`
+	// Args are always inserted after Command.
+	Args []string `json:"args,omitempty"`
+	// PromptArgs are inserted before the prompt for one-shot prompt runs.
+	PromptArgs []string `json:"promptArgs,omitempty"`
+	// InteractiveArgs are appended for interactive runs without a prompt.
+	InteractiveArgs []string `json:"interactiveArgs,omitempty"`
+	// Env entries are passed through/assigned like EnvPassthrough entries.
+	Env []string `json:"env,omitempty"`
+	// Install is an optional shell command used to install the agent in a container.
+	Install string `json:"install,omitempty"`
+	// Update is an optional shell command used by `dv update agent`. If omitted,
+	// Install is used as a fallback.
+	Update string `json:"update,omitempty"`
+	// InstallAsRoot runs Install as root when true.
+	InstallAsRoot bool `json:"installAsRoot,omitempty"`
+	// UpdateAsRoot runs Update as root when true. When Update is omitted and
+	// Install is used as a fallback, InstallAsRoot controls root execution.
+	UpdateAsRoot bool `json:"updateAsRoot,omitempty"`
+	// Aliases are alternate names that resolve to this agent.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // CopyFallback specifies an alternative source when the primary host path doesn't exist.
@@ -114,7 +144,7 @@ func Default() Config {
 			"CURSOR_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
 			"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
 			"CLAUDE_CODE_USE_BEDROCK", "DEEPSEEK_API_KEY", "GEMINI_API_KEY",
-			"AMP_API_KEY", "GH_TOKEN", "OPENROUTER_API_KEY",
+			"GH_TOKEN", "OPENROUTER_API_KEY",
 			"FACTORY_API_KEY", "MISTRAL_API_KEY",
 			"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
 			"ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -135,6 +165,7 @@ func Default() Config {
 		},
 		ContainerImages: map[string]string{},
 		CopyRules:       DefaultCopyRules(),
+		Agents:          map[string]AgentConfig{},
 	}
 }
 
@@ -183,6 +214,9 @@ func LoadOrCreate(configDir string) (Config, error) {
 	}
 	if cfg.CustomWorkdirs == nil {
 		cfg.CustomWorkdirs = map[string]string{}
+	}
+	if cfg.Agents == nil {
+		cfg.Agents = map[string]AgentConfig{}
 	}
 	cfg.migrateCopyFiles()
 	if w := strings.TrimSpace(cfg.CustomWorkdir); w != "" {
@@ -254,32 +288,6 @@ func DefaultCopyRules() []CopyRule {
 			Host:      "~/.codex/auth.json",
 			Container: "/home/discourse/.codex/auth.json",
 			Agents:    []string{"codex"},
-		},
-		{
-			Host:      "~/.gemini/GEMINI.md",
-			Container: "/home/discourse/.gemini/GEMINI.md",
-			Agents:    []string{"gemini"},
-		},
-		{
-			Host:      "~/.gemini/settings.json",
-			Container: "/home/discourse/.gemini/settings.json",
-			Agents:    []string{"gemini"},
-			MergeKey:  "mcpServers",
-		},
-		{
-			Host:      "~/.gemini/google_accounts.json",
-			Container: "/home/discourse/.gemini/google_accounts.json",
-			Agents:    []string{"gemini"},
-		},
-		{
-			Host:      "~/.gemini/oauth_creds.json",
-			Container: "/home/discourse/.gemini/oauth_creds.json",
-			Agents:    []string{"gemini"},
-		},
-		{
-			Host:      "~/.gemini/google_account_id",
-			Container: "/home/discourse/google_account_id",
-			Agents:    []string{"gemini"},
 		},
 		{
 			Host:      "~/.claude/.credentials.json",
