@@ -97,7 +97,7 @@ dv rename old new                         # rename an agent
 Build the Docker image (defaults to tag `ai_agent`).
 
 ```bash
-dv build [--no-cache] [--build-arg KEY=VAL] [--rm-existing]
+dv build [--no-cache] [--build-arg KEY=VAL] [--rm-existing] [--without-test-db]
 ```
 
 Notes:
@@ -108,6 +108,7 @@ Notes:
   3) Embedded default (materialized to `${XDG_CONFIG_HOME}/dv/Dockerfile`)
   The command prints which Dockerfile path it used.
 - BuildKit/buildx is enabled by default (`docker buildx build --load`). The CLI automatically falls back to legacy `docker build` if buildx is unavailable.
+- Use `--without-test-db` to skip the stock image's test database migration at build time; the development database is still created and migrated.
 - Opt-out controls: `--classic-build` forces legacy `docker build`, and `--builder NAME` targets a specific buildx builder (remote builders, Docker Build Cloud, etc.).
 
 ### dv pull
@@ -299,6 +300,7 @@ Manage multiple containers for the selected image; selection is stored in XDG co
 ```bash
 dv list
 dv new [NAME]
+dv new --without-test-db fast-agent
 dv new --plugin discourse-kanban kanban
 dv new --plugin discourse/discourse-kanban kanban
 dv new --plugin git@github.com:my-org/private-plugin.git private-test
@@ -306,7 +308,7 @@ dv select NAME
 dv rename OLD NEW
 ```
 
-`dv new --plugin` creates a normal agent, then clones each requested plugin into the Discourse `plugins/` directory before running provisioning maintenance. `--plugin` is repeatable. Plugin arguments accept:
+`dv new --plugin` creates a normal agent, then clones each requested plugin into the Discourse `plugins/` directory before running provisioning maintenance. `--plugin` is repeatable. Pass `--without-test-db` to skip test database migration during new-agent provisioning when the agent only needs the development database. Plugin arguments accept:
 
 - `discourse-kanban` shorthand for `https://github.com/discourse/discourse-kanban.git`
 - `owner/repo` shorthand for `https://github.com/owner/repo.git`

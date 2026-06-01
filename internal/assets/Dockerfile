@@ -92,13 +92,18 @@ echo "All services ready!"
 EOF
 RUN chmod +x /tmp/wait-for-services.sh
 
+ARG WITHOUT_TEST_DB=0
 RUN /sbin/boot & \
     ( \
       set -e; \
       /tmp/wait-for-services.sh; \
       sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && bin/rake db:create'; \
       sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && bin/rake db:migrate'; \
-      sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && RAILS_ENV=test bin/rake db:migrate'; \
+      if [ "$WITHOUT_TEST_DB" != "1" ]; then \
+        sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && RAILS_ENV=test bin/rake db:migrate'; \
+      else \
+        echo "Skipping test database migration (WITHOUT_TEST_DB=1)"; \
+      fi; \
       sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && bin/rails r /tmp/seed_users.rb' \
     ); \
     status=$?; \
