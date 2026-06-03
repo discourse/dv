@@ -361,17 +361,35 @@ func buildMaintenanceScript(withoutTestDB bool) string {
 		"echo \"Waiting for PostgreSQL to be ready...\"",
 		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo \"PostgreSQL did not become ready\"; exit 1)",
 		"",
-		"echo \"Migrating dev...\"",
-		"FAILED_LOG=/tmp/dv-migrate-dev.log",
-		"bin/rake db:migrate > $FAILED_LOG 2>&1",
 	}
 
-	if !withoutTestDB {
+	if withoutTestDB {
 		lines = append(lines,
-			"",
-			"echo \"Migrating test...\"",
-			"FAILED_LOG=/tmp/dv-migrate-test.log",
-			"RAILS_ENV=test bin/rake db:migrate > $FAILED_LOG 2>&1",
+			"echo \"Migrating dev...\"",
+			"FAILED_LOG=/tmp/dv-migrate-dev.log",
+			"bin/rake db:migrate > $FAILED_LOG 2>&1",
+		)
+	} else {
+		// Dev and test target separate databases, and Discourse sets
+		// dump_schema_after_migration = false, so the two migrations share no
+		// mutable files and can run concurrently. Each logs to its own file; we
+		// wait for both and report whichever failed.
+		lines = append(lines,
+			"echo \"Migrating dev and test...\"",
+			"bin/rake db:migrate > /tmp/dv-migrate-dev.log 2>&1 &",
+			"dev_pid=$!",
+			"RAILS_ENV=test bin/rake db:migrate > /tmp/dv-migrate-test.log 2>&1 &",
+			"test_pid=$!",
+			"dev_rc=0",
+			"wait $dev_pid || dev_rc=$?",
+			"test_rc=0",
+			"wait $test_pid || test_rc=$?",
+			"if [ $dev_rc -ne 0 ] || [ $test_rc -ne 0 ]; then",
+			"  echo \"Migration failed.\"",
+			"  if [ $dev_rc -ne 0 ]; then echo \"--- dev (/tmp/dv-migrate-dev.log) ---\"; cat /tmp/dv-migrate-dev.log; fi",
+			"  if [ $test_rc -ne 0 ]; then echo \"--- test (/tmp/dv-migrate-test.log) ---\"; cat /tmp/dv-migrate-test.log; fi",
+			"  exit 1",
+			"fi",
 		)
 	}
 
