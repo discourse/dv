@@ -248,13 +248,16 @@ func (c *Client) saveKeyToContainer() error {
 	return err
 }
 
-// testConnection verifies the API key works by making a simple request
+// testConnection verifies the API key works by making a simple request.
+// Keep this independent of plugin-provided settings; during early boot or after
+// plugin changes, probing an AI-specific site setting can fail with a Rails 500
+// even when the generated API key is valid.
 func (c *Client) testConnection() error {
 	if c.APIKey == "" {
 		return fmt.Errorf("no API key set")
 	}
 
-	req, err := http.NewRequest("GET", c.BaseURL+"/admin/site_settings.json?filter=discourse_ai_enabled", nil)
+	req, err := http.NewRequest("GET", c.BaseURL+"/session/current.json", nil)
 	if err != nil {
 		return err
 	}
@@ -269,8 +272,14 @@ func (c *Client) testConnection() error {
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		return fmt.Errorf("authentication failed (status %d)", resp.StatusCode)
 	}
+	if resp.StatusCode >= 500 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		c.verboseLog("API key verification got server status %d; assuming key is usable and continuing: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil
+	}
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("unexpected status: %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return nil

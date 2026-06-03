@@ -56,6 +56,9 @@ OpenRouter:
   OPENROUTER_API_KEY      OpenRouter API key
   OPENROUTER_KEY          Alternative OpenRouter API key variable
 
+Venice AI:
+  VENICE_API_KEY          Venice AI API key
+
 Other Providers:
   GROQ_API_KEY            Groq API key for fast inference models
   GEMINI_API_KEY          Google Gemini API key

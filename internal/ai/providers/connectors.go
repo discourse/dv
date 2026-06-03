@@ -21,6 +21,7 @@ type connector interface {
 
 var builtinConnectors = []connector{
 	&openRouterConnector{},
+	&veniceConnector{},
 	&openAIConnector{},
 	&anthropicConnector{},
 	&geminiConnector{},

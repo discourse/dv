@@ -67,10 +67,9 @@ func LoadCatalog(ctx context.Context, opts CatalogOptions) (ai.ProviderCatalog, 
 				_ = saveCache(cachePath, models, fetchedAt)
 			}
 		} else {
-			if cached, cacheTime, cacheErr := loadCache(cachePath, opts.TTL); cacheErr == nil {
-				entry.Models = cached
-				entry.LastUpdated = cacheTime
-			}
+			// Credentials are required to show provider models. Do not populate entries
+			// from stale cache when the matching API key is absent from the current env.
+			// This keeps the TUI catalog limited to providers the user can configure now.
 		}
 		entries = append(entries, entry)
 	}

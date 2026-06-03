@@ -138,11 +138,16 @@ func newAiConfigModel(opts aiConfigOptions) aiConfigModel {
 func catalogItems(cat ai.ProviderCatalog) []list.Item {
 	var items []list.Item
 	for _, entry := range cat.Entries {
+		// Do not show stale cached models for providers whose credentials are not
+		// currently configured. The catalog should reflect what the user can add now.
+		if !entry.HasCredentials {
+			continue
+		}
 		for _, model := range entry.Models {
 			items = append(items, providerItem{entryID: entry.ID, model: model})
 		}
 		if len(entry.Models) == 0 {
-			items = append(items, providerItem{entryID: entry.ID, locked: !entry.HasCredentials, errText: entry.Error})
+			items = append(items, providerItem{entryID: entry.ID, locked: true, errText: entry.Error})
 		}
 	}
 	return items
@@ -575,8 +580,10 @@ func (m aiConfigModel) viewString() string {
 		rightStyle = activeBorder.Width(max(20, m.rightPaneWidth-2)).Height(max(4, m.paneHeight-2))
 	}
 
-	left := leftStyle.Render(m.llmList.View())
-	right := rightStyle.Render(m.modelList.View())
+	leftContent := cropLines(m.llmList.View(), max(4, m.paneHeight-2))
+	rightContent := cropLines(m.modelList.View(), max(4, m.paneHeight-2))
+	left := leftStyle.Render(leftContent)
+	right := rightStyle.Render(rightContent)
 
 	var body string
 	if isCompact {
@@ -682,6 +689,17 @@ func (m aiConfigModel) viewString() string {
 	return view
 }
 
+func cropLines(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[:maxLines], "\n")
+}
+
 func (m aiConfigModel) renderStatusLine() string {
 	defaultName := "None"
 	for _, model := range m.state.Models {
@@ -705,6 +723,7 @@ func (m aiConfigModel) renderStatusLine() string {
 		{"OpenAI", "OAI", []string{"OPENAI_API_KEY"}},
 		{"Anthropic", "ANT", []string{"ANTHROPIC_API_KEY"}},
 		{"OpenRouter", "OR", []string{"OPENROUTER_API_KEY", "OPENROUTER_KEY"}},
+		{"Venice AI", "VEN", []string{"VENICE_API_KEY"}},
 		{"Groq", "GRQ", []string{"GROQ_API_KEY"}},
 		{"Gemini", "GEM", []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 		{"GitHub", "GH", []string{"GH_TOKEN"}},
@@ -748,19 +767,20 @@ func (m aiConfigModel) renderDetail() string {
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 
+	provider := displayProviderForLLM(llm)
 	if isCompact {
 		// Ultra-compact single-line detail
 		return dimStyle.Render("─ ") +
 			llm.DisplayName + " " +
 			dimStyle.Render("·") + " " +
-			llm.Provider + " " +
+			provider + " " +
 			dimStyle.Render(fmt.Sprintf("$%.2f/$%.2f", llm.InputCost, llm.OutputCost))
 	}
 
 	// Full detail view
 	lines := []string{
 		labelStyle.Render(llm.DisplayName) + dimStyle.Render(" ("+llm.Name+")"),
-		dimStyle.Render("Provider: ") + llm.Provider + "  " + dimStyle.Render("Tokenizer: ") + shortTokenizer(llm.Tokenizer),
+		dimStyle.Render("Provider: ") + provider + providerTechnicalSuffix(llm.Provider, provider) + "  " + dimStyle.Render("Tokenizer: ") + shortTokenizer(llm.Tokenizer),
 		dimStyle.Render("Tokens: ") + fmt.Sprintf("%d/%d", llm.MaxPromptTokens, llm.MaxOutputTokens) +
 			"  " + dimStyle.Render("Pricing: ") + fmt.Sprintf("$%.4f/$%.4f/$%.4f", llm.InputCost, llm.CachedInputCost, llm.OutputCost),
 	}
@@ -803,23 +823,10 @@ func (m aiConfigModel) createModelCmd(payload discourse.CreateLLMInput) tea.Cmd 
 	client := m.client
 	ctx := m.ctx
 	return func() tea.Msg {
-		// For Bedrock, store credentials as AiSecrets so they display correctly in Discourse admin.
-		if payload.Provider == "aws_bedrock" {
-			if payload.APIKey != "" {
-				id, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Secret Access Key", payload.APIKey)
-				if err != nil {
-					return aiErrMsg{err}
-				}
-				payload.AiSecretID = id
-				payload.APIKey = ""
-			}
-			if accessKey, ok := payload.ProviderParams["access_key_id"].(string); ok && accessKey != "" && !isNumericString(accessKey) {
-				id, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Access Key ID", accessKey)
-				if err != nil {
-					return aiErrMsg{err}
-				}
-				payload.ProviderParams["access_key_id"] = fmt.Sprintf("%d", id)
-			}
+		var err error
+		payload, err = m.prepareModelCredentials(ctx, client, payload)
+		if err != nil {
+			return aiErrMsg{err}
 		}
 		if _, err := client.CreateModel(ctx, payload); err != nil {
 			return aiErrMsg{err}
@@ -847,30 +854,10 @@ func (m aiConfigModel) updateModelCmd(id int64, payload discourse.CreateLLMInput
 	client := m.client
 	ctx := m.ctx
 	return func() tea.Msg {
-		// For Bedrock, keep credentials in AiSecrets.
-		if payload.Provider == "aws_bedrock" {
-			if payload.APIKey != "" {
-				if payload.ExistingAiSecretID > 0 {
-					if err := client.UpdateAiSecret(ctx, payload.ExistingAiSecretID, payload.APIKey); err != nil {
-						return aiErrMsg{err}
-					}
-					payload.AiSecretID = payload.ExistingAiSecretID
-				} else {
-					secretID, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Secret Access Key", payload.APIKey)
-					if err != nil {
-						return aiErrMsg{err}
-					}
-					payload.AiSecretID = secretID
-				}
-				payload.APIKey = ""
-			}
-			if accessKey, ok := payload.ProviderParams["access_key_id"].(string); ok && accessKey != "" && !isNumericString(accessKey) {
-				secretID, err := client.CreateAiSecret(ctx, payload.DisplayName+" - Access Key ID", accessKey)
-				if err != nil {
-					return aiErrMsg{err}
-				}
-				payload.ProviderParams["access_key_id"] = fmt.Sprintf("%d", secretID)
-			}
+		var err error
+		payload, err = m.prepareModelCredentials(ctx, client, payload)
+		if err != nil {
+			return aiErrMsg{err}
 		}
 		if err := client.UpdateModel(ctx, id, payload); err != nil {
 			return aiErrMsg{err}
@@ -881,6 +868,119 @@ func (m aiConfigModel) updateModelCmd(id int64, payload discourse.CreateLLMInput
 		}
 		return aiStateMsg{state: state, notice: fmt.Sprintf("Updated %s", payload.DisplayName)}
 	}
+}
+
+func (m aiConfigModel) prepareModelCredentials(ctx context.Context, client discourse.DiscourseClient, payload discourse.CreateLLMInput) (discourse.CreateLLMInput, error) {
+	if payload.Provider == "aws_bedrock" {
+		return m.prepareBedrockCredentials(ctx, client, payload)
+	}
+
+	apiKey := strings.TrimSpace(payload.APIKey)
+	if apiKey == "" {
+		return payload, nil
+	}
+
+	secretID := payload.ExistingAiSecretID
+	secretName := credentialSecretName(payload)
+	if secretID == 0 && secretName != "" {
+		secretID = findAiSecretIDByName(m.state.Meta.AiSecrets, secretName)
+	}
+
+	if secretID > 0 {
+		if err := client.UpdateAiSecret(ctx, secretID, apiKey); err != nil {
+			return payload, err
+		}
+		payload.AiSecretID = secretID
+	} else {
+		if secretName == "" {
+			secretName = payload.DisplayName + " API Key"
+		}
+		id, err := client.CreateAiSecret(ctx, secretName, apiKey)
+		if err != nil {
+			return payload, err
+		}
+		payload.AiSecretID = id
+	}
+
+	payload.APIKey = ""
+	return payload, nil
+}
+
+func (m aiConfigModel) prepareBedrockCredentials(ctx context.Context, client discourse.DiscourseClient, payload discourse.CreateLLMInput) (discourse.CreateLLMInput, error) {
+	if payload.ProviderParams == nil {
+		payload.ProviderParams = map[string]interface{}{}
+	}
+	if payload.APIKey != "" {
+		secretID := payload.ExistingAiSecretID
+		if secretID == 0 {
+			secretID = findAiSecretIDByName(m.state.Meta.AiSecrets, "AWS Bedrock Secret Access Key")
+		}
+		if secretID > 0 {
+			if err := client.UpdateAiSecret(ctx, secretID, payload.APIKey); err != nil {
+				return payload, err
+			}
+			payload.AiSecretID = secretID
+		} else {
+			id, err := client.CreateAiSecret(ctx, "AWS Bedrock Secret Access Key", payload.APIKey)
+			if err != nil {
+				return payload, err
+			}
+			payload.AiSecretID = id
+		}
+		payload.APIKey = ""
+	}
+	if accessKey, ok := payload.ProviderParams["access_key_id"].(string); ok && accessKey != "" && !isNumericString(accessKey) {
+		secretID := findAiSecretIDByName(m.state.Meta.AiSecrets, "AWS Bedrock Access Key ID")
+		if secretID > 0 {
+			if err := client.UpdateAiSecret(ctx, secretID, accessKey); err != nil {
+				return payload, err
+			}
+		} else {
+			id, err := client.CreateAiSecret(ctx, "AWS Bedrock Access Key ID", accessKey)
+			if err != nil {
+				return payload, err
+			}
+			secretID = id
+		}
+		payload.ProviderParams["access_key_id"] = fmt.Sprintf("%d", secretID)
+	}
+	return payload, nil
+}
+
+func credentialSecretName(payload discourse.CreateLLMInput) string {
+	provider := strings.TrimSpace(payload.Provider)
+	url := strings.ToLower(strings.TrimSpace(payload.URL))
+	switch provider {
+	case "open_ai":
+		if strings.Contains(url, "api.venice.ai") {
+			return "Venice AI API Key"
+		}
+		return "OpenAI API Key"
+	case "open_router":
+		return "OpenRouter API Key"
+	case "anthropic":
+		return "Anthropic API Key"
+	case "google":
+		return "Google Gemini API Key"
+	default:
+		if provider != "" {
+			return strings.Title(strings.ReplaceAll(provider, "_", " ")) + " API Key"
+		}
+	}
+	return ""
+}
+
+func findAiSecretIDByName(secrets []ai.AiSecret, name string) int64 {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0
+	}
+	for _, secret := range secrets {
+		if strings.EqualFold(strings.TrimSpace(secret.Name), name) {
+			return secret.ID
+		}
+	}
+	return 0
 }
 
 func (m aiConfigModel) deleteModelCmd(id int64, name string) tea.Cmd {
@@ -1078,7 +1178,8 @@ func (i llmItem) Title() string {
 }
 
 func (i llmItem) Description() string {
-	return fmt.Sprintf("%s · %d tokens · $%.2f/$%.2f", i.model.Provider, i.model.MaxPromptTokens, i.model.InputCost, i.model.OutputCost)
+	provider := displayProviderForLLM(i.model)
+	return fmt.Sprintf("%s · %d tokens · $%.2f/$%.2f", provider, i.model.MaxPromptTokens, i.model.InputCost, i.model.OutputCost)
 }
 
 func (i llmItem) FilterValue() string {
@@ -1106,14 +1207,15 @@ func (i providerItem) Description() string {
 		}
 		return "No credentials detected"
 	}
+	provider := displayProviderForCatalog(i.entryID, i.model)
 	// Handle free models
 	if i.model.InputCost == 0 && i.model.OutputCost == 0 {
 		if pricingUnknown(i.model) {
-			return fmt.Sprintf("%s · ctx %d · pricing unknown", i.model.Provider, i.model.ContextTokens)
+			return fmt.Sprintf("%s · ctx %d · pricing unknown", provider, i.model.ContextTokens)
 		}
-		return fmt.Sprintf("%s · ctx %d · FREE", i.model.Provider, i.model.ContextTokens)
+		return fmt.Sprintf("%s · ctx %d · FREE", provider, i.model.ContextTokens)
 	}
-	return fmt.Sprintf("%s · ctx %d · $%.4f/$%.4f", i.model.Provider, i.model.ContextTokens, i.model.InputCost, i.model.OutputCost)
+	return fmt.Sprintf("%s · ctx %d · $%.4f/$%.4f", provider, i.model.ContextTokens, i.model.InputCost, i.model.OutputCost)
 }
 
 func (i providerItem) FilterValue() string {
@@ -1121,6 +1223,29 @@ func (i providerItem) FilterValue() string {
 		return i.model.ID
 	}
 	return i.entryID
+}
+
+func displayProviderForCatalog(entryID string, model ai.ProviderModel) string {
+	if strings.EqualFold(strings.TrimSpace(entryID), "venice") {
+		return "venice_ai"
+	}
+	return strings.TrimSpace(model.Provider)
+}
+
+func displayProviderForLLM(llm ai.LLMModel) string {
+	provider := strings.TrimSpace(llm.Provider)
+	if providerSlug(provider) == "open_ai" && strings.Contains(strings.ToLower(llm.URL), "api.venice.ai") {
+		return "venice_ai"
+	}
+	return provider
+}
+
+func providerTechnicalSuffix(actualProvider, displayProvider string) string {
+	actualProvider = strings.TrimSpace(actualProvider)
+	if actualProvider == "" || actualProvider == displayProvider {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(" (Discourse: " + actualProvider + ")")
 }
 
 func pricingUnknown(model ai.ProviderModel) bool {
@@ -1207,7 +1332,7 @@ func newCreateForm(entryID string, model ai.ProviderModel, meta ai.LLMMetadata, 
 	}
 	providerKey := providerSlug(entryID)
 	defaults := map[string]interface{}{}
-	if providerKey == "open_ai" {
+	if providerKey == "open_ai" && !strings.EqualFold(strings.TrimSpace(entryID), "venice") {
 		defaults["enable_responses_api"] = true
 	}
 	if providerKey == "aws_bedrock" {
@@ -1708,7 +1833,7 @@ func providerSlug(entryID string) string {
 	switch key {
 	case "openrouter", "open_router":
 		return "open_router"
-	case "openai", "open_ai":
+	case "openai", "open_ai", "venice":
 		return "open_ai"
 	case "gemini", "google_gemini":
 		return "google"
@@ -1942,6 +2067,8 @@ func providerKeyHints(entryID string) []string {
 		return []string{"OPENROUTER_API_KEY", "OPENROUTER_KEY"}
 	case "openai":
 		return []string{"OPENAI_API_KEY"}
+	case "venice":
+		return []string{"VENICE_API_KEY"}
 	case "anthropic":
 		return []string{"ANTHROPIC_API_KEY"}
 	case "gemini":
