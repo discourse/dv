@@ -1,10 +1,12 @@
 # Neovim dev environment for dv agents.
 #
-# Installs the latest stable Neovim and copies your host Neovim config into the
-# container. Works regardless of host OS: the config path (~/.config/nvim) is the
-# same on macOS and Linux, and the CPU architecture is detected inside the
-# container, so the right Neovim build is fetched whether the container is arm64
-# (Apple Silicon hosts) or x86_64 (Intel/Linux hosts).
+# Installs the latest stable Neovim, copies your host Neovim config into the
+# container, and installs hunk (https://github.com/modem-dev/hunk) — a
+# review-first terminal diff viewer for agent-authored changesets. Works
+# regardless of host OS: the config path (~/.config/nvim) is the same on macOS
+# and Linux, and the CPU architecture is detected inside the container, so the
+# right Neovim build is fetched whether the container is arm64 (Apple Silicon
+# hosts) or x86_64 (Intel/Linux hosts).
 #
 # Usage:
 #   dv new --template ./templates/nvim.yaml my-agent
@@ -51,4 +53,19 @@ on_create:
       echo "Neovim installed: $(nvim --version | head -1)"
     else
       echo "WARNING: Neovim install failed; agent created without nvim. Re-run the install later." >&2
+    fi
+  # hunk (npm package "hunkdiff", command "hunk"): a review-first terminal diff
+  # viewer for agent-authored changesets — https://github.com/modem-dev/hunk.
+  # It's a CLI tool (not an nvim plugin); installed globally via npm, with a sudo
+  # fallback when the global prefix isn't user-writable. Best-effort like the
+  # Neovim step above.
+  - |
+    install_hunk() {
+      command -v npm >/dev/null 2>&1 || return 1
+      npm i -g hunkdiff >/dev/null 2>&1 || sudo npm i -g hunkdiff >/dev/null 2>&1
+    }
+    if install_hunk; then
+      echo "hunk installed: $(command -v hunk || command -v hunkdiff || echo ok)"
+    else
+      echo "WARNING: hunk (hunkdiff) install failed or npm missing; agent created without it." >&2
     fi
