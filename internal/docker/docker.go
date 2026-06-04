@@ -1033,3 +1033,39 @@ func GetContainerEnv(name string) (map[string]string, error) {
 	}
 	return envMap, nil
 }
+
+// GetContainerMounts returns the bind mounts of an existing container, read back
+// via `docker inspect`. Used when recreating a container (e.g. an automatic port
+// remap) so user-declared bind mounts are preserved alongside the workdir and
+// env that are already recovered the same way. Anonymous/named volumes and the
+// forwarded SSH agent socket (re-established separately) are excluded.
+func GetContainerMounts(name string) ([]Mount, error) {
+	out, err := exec.Command("docker", "inspect", "-f", "{{json .Mounts}}", name).Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseContainerMounts(out)
+}
+
+func parseContainerMounts(data []byte) ([]Mount, error) {
+	var raw []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	var mounts []Mount
+	for _, m := range raw {
+		// Only re-apply host bind mounts; anonymous/named volumes are managed by
+		// docker. Skip the forwarded SSH agent socket (see RunDetached) — it is
+		// re-established via the sshAuthSock path, not as a persisted bind mount.
+		if m.Type != "bind" || m.Destination == "/tmp/ssh-agent.sock" {
+			continue
+		}
+		mounts = append(mounts, Mount{Host: m.Source, Container: m.Destination, ReadOnly: !m.RW})
+	}
+	return mounts, nil
+}

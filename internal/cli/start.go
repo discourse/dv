@@ -151,6 +151,7 @@ var startCmd = &cobra.Command{
 						existingWorkdir = workdir
 					}
 					existingEnvs, _ := docker.GetContainerEnv(name)
+					existingMounts, _ := docker.GetContainerMounts(name)
 
 					// Commit container to temporary image
 					tempImage := name + "-dv-snapshot"
@@ -171,12 +172,14 @@ var startCmd = &cobra.Command{
 					}
 					existingEnvs["DISCOURSE_PORT"] = fmt.Sprintf("%d", newPort)
 
-					// Recreate container with new port from snapshot
+					// Recreate container with new port from snapshot. Re-apply the
+					// existing bind mounts (the snapshot bakes the filesystem but
+					// not mount specs) so a mounted plugin isn't silently dropped.
 					fmt.Fprintf(cmd.OutOrStdout(), "Recreating container with new port...\n")
-					if err := docker.RunDetached(name, existingWorkdir, tempImage, newPort, containerPort, labels, existingEnvs, nil, "", nil); err != nil {
+					if err := docker.RunDetached(name, existingWorkdir, tempImage, newPort, containerPort, labels, existingEnvs, nil, "", existingMounts); err != nil {
 						// Try to restore from snapshot
 						fmt.Fprintf(cmd.ErrOrStderr(), "Failed to recreate, attempting restore...\n")
-						_ = docker.RunDetached(name, existingWorkdir, tempImage, existingPort, containerPort, labels, existingEnvs, nil, "", nil)
+						_ = docker.RunDetached(name, existingWorkdir, tempImage, existingPort, containerPort, labels, existingEnvs, nil, "", existingMounts)
 						_ = docker.RemoveImage(tempImage)
 						return fmt.Errorf("failed to recreate container: %w", err)
 					}
