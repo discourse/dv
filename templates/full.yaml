@@ -40,12 +40,17 @@ plugins:
   - repo: https://github.com/discourse/discourse-voting.git
 
 # 6. Themes
-# Install themes or theme components.
+# Install themes or theme components. They are uploaded and enabled by default:
+# components are attached to the default theme; full themes become the default theme.
+# Use `pr:` or OWNER/REPO#PR to test a pull request.
 themes:
   - repo: https://github.com/discourse/discourse-canvas-theme.git
     name: "Canvas Theme"
     auto_watch: true # Automatically start the theme watcher service
     # path: /home/discourse/canvas-theme # Custom path in container
+    # branch: main
+    # pr: 123
+    # enabled: false # Upload/watch only; don't attach or make default
 
 # 7. Site Settings
 # Automatically set Discourse site settings after the container is ready.

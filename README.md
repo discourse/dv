@@ -81,10 +81,11 @@ With `dv` installed (either via the script or `go build`), run the CLI directly 
    dv extract plugin discourse-akismet
    ```
 
-Optional: manage multiple named containers ("agents") and bootstrap plugin workspaces:
+Optional: manage multiple named containers ("agents") and bootstrap plugin/theme workspaces:
 ```bash
 dv new my_project                         # create and select a new agent
 dv new --plugin discourse-kanban kanban   # create an agent with a plugin pre-cloned
+dv new --theme discourse-mermaid-theme-component mermaid # install and enable a theme component
 dv plugin add discourse-solved            # add a plugin to the selected running agent
 dv list                                   # show all agents for the selected image
 dv select my_project                      # select an existing agent
@@ -304,6 +305,9 @@ dv new --without-test-db fast-agent
 dv new --plugin discourse-kanban kanban
 dv new --plugin discourse/discourse-kanban kanban
 dv new --plugin git@github.com:my-org/private-plugin.git private-test
+dv new --theme discourse-mermaid-theme-component mermaid
+dv new --theme discourse/discourse-mermaid-theme-component#76 mermaid-pr
+dv new --theme https://github.com/discourse/discourse-mermaid-theme-component/pull/76 mermaid-pr-url
 dv select NAME
 dv rename OLD NEW
 ```
@@ -314,6 +318,16 @@ dv rename OLD NEW
 - `owner/repo` shorthand for `https://github.com/owner/repo.git`
 - full HTTPS URLs
 - SSH URLs such as `git@github.com:owner/repo.git`
+
+`dv new --theme` creates a normal agent, uploads the requested theme or theme component into the new Discourse, and enables it by default. Theme components are attached to the default theme; full themes are set as the default theme. `--theme` is repeatable. Theme arguments accept:
+
+- `discourse-mermaid-theme-component` shorthand for `https://github.com/discourse/discourse-mermaid-theme-component.git`
+- `owner/repo` shorthand for `https://github.com/owner/repo.git`
+- `owner/repo#123` or `name#123` shorthand to checkout a GitHub PR before upload
+- full HTTPS/SSH git URLs
+- GitHub PR URLs such as `https://github.com/discourse/discourse-mermaid-theme-component/pull/76`
+
+Template `themes:` entries support the same `repo` forms plus explicit `pr:`, `branch:`, and `enabled:` fields. `enabled` defaults to `true` for `dv new` templates; set `enabled: false` to upload/watch without attaching the component or making the theme default.
 
 ### dv plugin
 Manage plugins in the selected running agent.
@@ -348,7 +362,7 @@ A default template can also be set via `dv config defaultTemplate [PATH]`, which
 
 Templates support:
 - **Discourse Configuration**: Specify branches, PRs, or custom repos.
-- **Plugins & Themes**: Automatically clone plugins and install/watch themes.
+- **Plugins & Themes**: Automatically clone plugins and install/enable/watch themes.
 - **Site Settings**: Set Discourse settings (title, theme, experimental features) on boot.
 - **Copy Rules**: Sync host files (like `.gitconfig` or API keys) into the container.
 - **Provisioning**: Run arbitrary bash commands via `on_create`.
@@ -517,7 +531,7 @@ Use `dv config ai-tool [NAME]` to scaffold a directory under `/home/discourse/ai
 Use `dv config defaultTemplate [PATH]` to set default template to be used when `dv new` is ran without a `--template` flag. See [templates/full.yaml](./templates/full.yaml) for a complete example of all available features for templates.
 
 #### Theme bootstrap
-Use `dv config theme [REPO]` to prepare a theme workspace inside the running container. Running it with no arguments prompts for a name **and** whether you’re building a full theme or component, installs the `discourse_theme` gem, scaffolds a minimal theme under `/home/discourse/<name>`, writes an `AGENTS.md` brief for AI tools, and updates the workdir override so `dv enter` drops you there. Supplying a git URL or `owner/repo` slug clones the existing theme instead of generating a skeleton, while still installing the gem, writing `AGENTS.md`, and configuring the watcher. Each workspace also receives a `theme-watch-<slug>` runit service that runs `discourse_theme watch` with an API key that’s automatically bound to the first admin user; restart it anytime with `sv restart theme-watch-<slug>` inside the container. Pass `--theme-name` (and optionally `--kind theme|component`) to skip the interactive prompts, and `--verbose` if you want to see every helper command that runs (handy when debugging API key or watcher issues).
+Use `dv config theme [REPO]` to prepare a theme workspace inside the running container. Running it with no arguments prompts for a name **and** whether you’re building a full theme or component, installs the `discourse_theme` gem, scaffolds a minimal theme under `/home/discourse/<name>`, writes an `AGENTS.md` brief for AI tools, and updates the workdir override so `dv enter` drops you there. Supplying a git URL, `owner/repo` slug, `owner/repo#PR`, or GitHub PR URL clones the existing theme instead of generating a skeleton, while still installing the gem, uploading the theme, writing `AGENTS.md`, and configuring the watcher. Each workspace also receives a `theme-watch-<slug>` runit service that runs `discourse_theme watch` with an API key that’s automatically bound to the first admin user; restart it anytime with `sv restart theme-watch-<slug>` inside the container. Pass `--theme-name` (and optionally `--kind theme|component`) to skip the interactive prompts, and `--verbose` if you want to see every helper command that runs (handy when debugging API key or watcher issues).
 
 #### Site Settings
 Use `dv config site_settings FILENAME.yaml` to apply Discourse site settings from a YAML file. Supports 1Password integration via `op://` references for sensitive values.

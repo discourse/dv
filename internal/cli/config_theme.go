@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 const (
 	themeWatcherScriptPath = "/usr/local/bin/dv_theme_watcher.rb"
 	themeAPIKeyDir         = "/home/discourse/.dv/theme_api_keys"
+	defaultThemeOwner      = "discourse"
 )
 
 type themeCommandContext struct {
@@ -206,10 +208,12 @@ func handleThemeScaffold(cmd *cobra.Command, ctx themeCommandContext, flagName s
 }
 
 func handleThemeClone(cmd *cobra.Command, ctx themeCommandContext, theme templateTheme) error {
-	repoURL, defaultName := normalizeThemeRepo(theme.Repo)
-	if repoURL == "" {
-		return fmt.Errorf("could not determine repo URL from %q", theme.Repo)
+	normalizedTheme, repoURL, defaultName, err := normalizeThemeCloneSpec(theme)
+	if err != nil {
+		return err
 	}
+	theme = normalizedTheme
+
 	name := theme.Name
 	if name == "" {
 		name = defaultName
@@ -225,9 +229,14 @@ func handleThemeClone(cmd *cobra.Command, ctx themeCommandContext, theme templat
 		return err
 	}
 
+	cloneArgs := []string{"git", "clone"}
+	if theme.Branch != "" {
+		cloneArgs = append(cloneArgs, "--branch", theme.Branch)
+	}
+	cloneArgs = append(cloneArgs, repoURL, themePath)
 	fmt.Fprintf(cmd.OutOrStdout(), "Cloning %s into %s...\n", repoURL, themePath)
-	cloneScript := fmt.Sprintf("git clone %s %s", shellQuote(repoURL), shellQuote(themePath))
-	if out, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, nil, []string{"bash", "-lc", cloneScript}); err != nil {
+	cloneScript := shellJoin(cloneArgs)
+	if out, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, ctx.envs, []string{"bash", "-lc", cloneScript}); err != nil {
 		if strings.TrimSpace(out) != "" {
 			fmt.Fprint(cmd.ErrOrStderr(), out)
 		}
@@ -236,24 +245,34 @@ func handleThemeClone(cmd *cobra.Command, ctx themeCommandContext, theme templat
 		fmt.Fprint(cmd.OutOrStdout(), out)
 	}
 
+	if theme.PR != 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Checking out theme PR %d...\n", theme.PR)
+		if err := checkoutThemePR(ctx, themePath, theme.PR); err != nil {
+			return err
+		}
+	}
+
 	fmt.Fprintf(cmd.OutOrStdout(), "Ensuring discourse_theme gem is available...\n")
 	if err := installDiscourseThemeGem(cmd, ctx.containerName); err != nil {
 		return err
 	}
 
-	isComponent, err := detectComponentFlag(ctx, themePath)
+	enableTheme := themeEnabledDefault(theme, false)
+	installResult, err := uploadThemeIntoDiscourse(cmd, ctx, themePath, enableTheme)
 	if err != nil {
 		return err
 	}
+	isComponent := installResult.Component
 
 	serviceName, err = finalizeThemeWorkspace(cmd, ctx, finalizeThemeOptions{
-		DisplayName:    name,
-		ThemePath:      themePath,
-		RepoURL:        repoURL,
-		IsComponent:    isComponent,
-		Slug:           dirSlug,
-		ServiceName:    serviceName,
-		HostMirrorPath: hostMirrorPath,
+		DisplayName:     name,
+		ThemePath:       themePath,
+		RepoURL:         repoURL,
+		IsComponent:     isComponent,
+		Slug:            dirSlug,
+		ServiceName:     serviceName,
+		HostMirrorPath:  hostMirrorPath,
+		UploadedThemeID: installResult.ID,
 	})
 	if err != nil {
 		return err
@@ -264,13 +283,14 @@ func handleThemeClone(cmd *cobra.Command, ctx themeCommandContext, theme templat
 }
 
 type finalizeThemeOptions struct {
-	DisplayName    string
-	ThemePath      string
-	RepoURL        string
-	IsComponent    bool
-	Slug           string
-	ServiceName    string
-	HostMirrorPath string
+	DisplayName     string
+	ThemePath       string
+	RepoURL         string
+	IsComponent     bool
+	Slug            string
+	ServiceName     string
+	HostMirrorPath  string
+	UploadedThemeID int
 }
 
 func finalizeThemeWorkspace(cmd *cobra.Command, ctx themeCommandContext, opts finalizeThemeOptions) (string, error) {
@@ -566,25 +586,109 @@ func writeThemeSkeleton(root string, payload themeSkeletonPayload) error {
 	return os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(content), 0o644)
 }
 
-func detectComponentFlag(ctx themeCommandContext, themePath string) (bool, error) {
-	aboutPath := path.Join(themePath, "about.json")
-	script := fmt.Sprintf("if [ -f %s ]; then cat %s; fi", shellQuote(aboutPath), shellQuote(aboutPath))
-	out, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, nil, []string{"bash", "-lc", script})
+type themeInstallResult struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	Component bool   `json:"component"`
+	Action    string `json:"action"`
+	ParentID  int    `json:"parent_id"`
+}
+
+func uploadThemeIntoDiscourse(cmd *cobra.Command, ctx themeCommandContext, themePath string, enable bool) (themeInstallResult, error) {
+	if enable {
+		fmt.Fprintf(cmd.OutOrStdout(), "Uploading and enabling theme in Discourse...\n")
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Uploading theme in Discourse...\n")
+	}
+
+	ruby := `require "json"
+
+path = ENV.fetch("DV_THEME_PATH")
+enable_theme = ENV.fetch("DV_THEME_ENABLE") == "1"
+
+theme = RemoteTheme.import_theme_from_directory(path)
+# Discourse's Theme#enabled flag means "not disabled". It is separate from
+# dv's enabled option, which controls whether we attach a component or make
+# a full theme the default after upload.
+theme.enabled = true
+if theme.changed?
+  theme.save!
+end
+
+action = "uploaded"
+parent_id = nil
+
+if enable_theme
+  if theme.component?
+    parent = Theme.find_by(id: SiteSetting.default_theme_id)
+    parent = nil if parent&.component?
+    parent ||= Theme.find_by(id: -1)
+    parent ||= Theme.not_components.order(:id).first
+    raise "No parent theme found for component #{theme.name}" if parent.nil?
+
+    if !parent.child_theme_ids.include?(theme.id)
+      parent.add_relative_theme!(:child, theme)
+    end
+
+    action = "attached"
+    parent_id = parent.id
+  else
+    theme.set_default!
+    action = "default"
+  end
+
+  Theme.clear_cache!
+  Theme.expire_site_cache!
+end
+
+STDOUT.sync = true
+puts "DV_THEME_RESULT:" + JSON.generate(
+  id: theme.id,
+  name: theme.name,
+  component: theme.component?,
+  action: action,
+  parent_id: parent_id,
+)
+`
+	enableValue := "0"
+	if enable {
+		enableValue = "1"
+	}
+	runner := fmt.Sprintf("DV_THEME_PATH=%s DV_THEME_ENABLE=%s RAILS_ENV=development bundle exec rails runner - <<'RUBY'\n%s\nRUBY", shellQuote(themePath), shellQuote(enableValue), ruby)
+	out, err := docker.ExecCombinedOutput(ctx.containerName, ctx.discourseRoot, ctx.envs, []string{"bash", "-lc", runner})
 	if err != nil {
-		return false, err
+		trimmed := strings.TrimSpace(out)
+		if trimmed != "" {
+			return themeInstallResult{}, fmt.Errorf("failed to upload theme: %w\n%s", err, trimmed)
+		}
+		return themeInstallResult{}, fmt.Errorf("failed to upload theme: %w", err)
 	}
-	trimmed := strings.TrimSpace(out)
-	if trimmed == "" {
-		return false, nil
+
+	var result themeInstallResult
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "DV_THEME_RESULT:") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "DV_THEME_RESULT:")
+		if err := json.Unmarshal([]byte(payload), &result); err != nil {
+			return themeInstallResult{}, fmt.Errorf("parse theme upload result: %w", err)
+		}
+		break
 	}
-	var data map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &data); err != nil {
-		return false, err
+	if result.ID == 0 {
+		return themeInstallResult{}, fmt.Errorf("theme upload did not report a theme id: %s", strings.TrimSpace(out))
 	}
-	if val, ok := data["component"].(bool); ok {
-		return val, nil
+
+	switch result.Action {
+	case "attached":
+		fmt.Fprintf(cmd.OutOrStdout(), "Theme component '%s' uploaded and attached to default theme.\n", result.Name)
+	case "default":
+		fmt.Fprintf(cmd.OutOrStdout(), "Theme '%s' uploaded and set as the default theme.\n", result.Name)
+	default:
+		fmt.Fprintf(cmd.OutOrStdout(), "Theme '%s' uploaded.\n", result.Name)
 	}
-	return false, nil
+	return result, nil
 }
 
 func configureThemeWatcher(cmd *cobra.Command, ctx themeCommandContext, opts finalizeThemeOptions, serviceName string) error {
@@ -602,7 +706,7 @@ func configureThemeWatcher(cmd *cobra.Command, ctx themeCommandContext, opts fin
 	if err := ensureThemeWatcherScript(cmd, ctx); err != nil {
 		return err
 	}
-	if err := writeThemeCLIConfig(cmd, ctx, opts.ThemePath, discourseURL, apiKey); err != nil {
+	if err := writeThemeCLIConfig(cmd, ctx, opts.ThemePath, discourseURL, apiKey, opts.UploadedThemeID); err != nil {
 		return err
 	}
 	return installWatcherService(cmd, ctx, serviceName, opts, discourseURL, keyPath)
@@ -662,17 +766,20 @@ func ensureThemeAPIKey(cmd *cobra.Command, ctx themeCommandContext, slug string)
 	return key, keyPath, nil
 }
 
-func writeThemeCLIConfig(cmd *cobra.Command, ctx themeCommandContext, themePath, discourseURL, apiKey string) error {
+func writeThemeCLIConfig(cmd *cobra.Command, ctx themeCommandContext, themePath, discourseURL, apiKey string, themeID int) error {
 	ruby := `require "discourse_theme"
 DiscourseTheme::Cli.settings_file = File.expand_path("~/.discourse_theme")
 config = DiscourseTheme::Config.new(DiscourseTheme::Cli.settings_file)
 settings = config[ENV.fetch("THEME_DIR")]
 settings.url = ENV.fetch("DISCOURSE_URL")
 settings.api_key = ENV.fetch("DISCOURSE_API_KEY")
+if ENV["DISCOURSE_THEME_ID"].to_i > 0
+  settings.theme_id = ENV["DISCOURSE_THEME_ID"].to_i
+end
 `
-	cmdStr := fmt.Sprintf("THEME_DIR=%s DISCOURSE_URL=%s DISCOURSE_API_KEY=%s ruby <<'RUBY'\n%s\nRUBY", shellQuote(themePath), shellQuote(discourseURL), shellQuote(apiKey), ruby)
+	cmdStr := fmt.Sprintf("THEME_DIR=%s DISCOURSE_URL=%s DISCOURSE_API_KEY=%s DISCOURSE_THEME_ID=%s ruby <<'RUBY'\n%s\nRUBY", shellQuote(themePath), shellQuote(discourseURL), shellQuote(apiKey), shellQuote(strconv.Itoa(themeID)), ruby)
 	ctx.verboseLog(cmd, "Writing ~/.discourse_theme entry for %s", themePath)
-	if _, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, nil, []string{"bash", "-lc", cmdStr}); err != nil {
+	if _, err := docker.ExecOutput(ctx.containerName, ctx.discourseRoot, ctx.envs, []string{"bash", "-lc", cmdStr}); err != nil {
 		return fmt.Errorf("failed to update discourse_theme config: %w", err)
 	}
 	return nil
@@ -781,19 +888,177 @@ func lastNonEmptyLine(out string) string {
 	return ""
 }
 
+func resolveThemeSpecs(inputs []string) ([]templateTheme, error) {
+	out := make([]templateTheme, 0, len(inputs))
+	seenPaths := map[string]string{}
+	for _, input := range inputs {
+		theme, _, defaultName, err := resolveThemeSpec(input)
+		if err != nil {
+			return nil, err
+		}
+		name := theme.Name
+		if name == "" {
+			name = defaultName
+		}
+		themePath := strings.TrimSpace(theme.Path)
+		if themePath == "" {
+			themePath = path.Join("/home/discourse", themeDirSlug(name))
+		}
+		if prev, ok := seenPaths[themePath]; ok {
+			return nil, fmt.Errorf("themes %q and %q both resolve to %s", prev, input, themePath)
+		}
+		seenPaths[themePath] = input
+		out = append(out, theme)
+	}
+	return out, nil
+}
+
+func resolveThemeSpec(input string) (templateTheme, string, string, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return templateTheme{}, "", "", fmt.Errorf("theme cannot be empty")
+	}
+	theme := templateTheme{Repo: trimmed, Enabled: boolPtr(true)}
+	return normalizeThemeCloneSpec(theme)
+}
+
+func normalizeThemeCloneSpec(theme templateTheme) (templateTheme, string, string, error) {
+	originalRepo := strings.TrimSpace(theme.Repo)
+	if originalRepo == "" {
+		return theme, "", "", fmt.Errorf("theme repo cannot be empty")
+	}
+
+	if owner, repo, pr, ok := parseGitHubPullURL(originalRepo); ok {
+		if theme.PR != 0 && theme.PR != pr {
+			return theme, "", "", fmt.Errorf("theme repo %q points to PR %d but pr is set to %d", originalRepo, pr, theme.PR)
+		}
+		theme.Repo = githubRepoCloneURL(owner, repo)
+		theme.PR = pr
+	} else {
+		base, pr, hasPR, err := splitThemePRShorthand(originalRepo)
+		if err != nil {
+			return theme, "", "", err
+		}
+		if hasPR {
+			if theme.PR != 0 && theme.PR != pr {
+				return theme, "", "", fmt.Errorf("theme repo %q points to PR %d but pr is set to %d", originalRepo, pr, theme.PR)
+			}
+			theme.Repo = base
+			theme.PR = pr
+		}
+	}
+	if theme.Branch != "" && theme.PR != 0 {
+		return theme, "", "", fmt.Errorf("theme %q cannot specify both branch and pr", originalRepo)
+	}
+
+	repoURL, defaultName := normalizeThemeRepo(theme.Repo)
+	if repoURL == "" {
+		return theme, "", "", fmt.Errorf("could not determine repo URL from %q", originalRepo)
+	}
+	theme.Repo = repoURL
+	if theme.PR != 0 {
+		owner, repo := ownerRepoFromURL(repoURL)
+		if owner == "" || repo == "" {
+			return theme, "", "", fmt.Errorf("theme PR checkout requires a GitHub repo, got %q", repoURL)
+		}
+	}
+	return theme, repoURL, defaultName, nil
+}
+
+func splitThemePRShorthand(input string) (string, int, bool, error) {
+	idx := strings.LastIndex(input, "#")
+	if idx < 0 {
+		return input, 0, false, nil
+	}
+	base := strings.TrimSpace(input[:idx])
+	prText := strings.TrimSpace(input[idx+1:])
+	if base == "" || prText == "" {
+		return "", 0, false, fmt.Errorf("invalid theme PR shorthand %q; use OWNER/REPO#123", input)
+	}
+	pr, err := strconv.Atoi(prText)
+	if err != nil || pr <= 0 {
+		return "", 0, false, fmt.Errorf("invalid theme PR shorthand %q; use OWNER/REPO#123", input)
+	}
+	return base, pr, true, nil
+}
+
+func parseGitHubPullURL(input string) (string, string, int, bool) {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(input, "/"))
+	if strings.HasPrefix(trimmed, "github.com/") || strings.HasPrefix(trimmed, "www.github.com/") {
+		trimmed = "https://" + trimmed
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		return "", "", 0, false
+	}
+	host := strings.ToLower(u.Host)
+	if host != "github.com" && host != "www.github.com" {
+		return "", "", 0, false
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" {
+		return "", "", 0, false
+	}
+	pr, err := strconv.Atoi(parts[3])
+	if err != nil || pr <= 0 {
+		return "", "", 0, false
+	}
+	owner := strings.TrimSpace(parts[0])
+	repo := strings.TrimSuffix(strings.TrimSpace(parts[1]), ".git")
+	if owner == "" || repo == "" {
+		return "", "", 0, false
+	}
+	return owner, repo, pr, true
+}
+
+func githubRepoCloneURL(owner, repo string) string {
+	return fmt.Sprintf("https://github.com/%s/%s.git", owner, strings.TrimSuffix(repo, ".git"))
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func themeEnabledDefault(theme templateTheme, defaultValue bool) bool {
+	if theme.Enabled == nil {
+		return defaultValue
+	}
+	return *theme.Enabled
+}
+
+func checkoutThemePR(ctx themeCommandContext, themePath string, prNumber int) error {
+	branch := fmt.Sprintf("dv-pr-%d", prNumber)
+	script := fmt.Sprintf(`set -euo pipefail
+git fetch origin pull/%d/head:%s
+git checkout %s
+`, prNumber, shellQuote(branch), shellQuote(branch))
+	out, err := docker.ExecCombinedOutput(ctx.containerName, themePath, ctx.envs, []string{"bash", "-lc", script})
+	if err != nil {
+		if strings.TrimSpace(out) != "" {
+			return fmt.Errorf("theme PR checkout failed: %w: %s", err, strings.TrimSpace(out))
+		}
+		return fmt.Errorf("theme PR checkout failed: %w", err)
+	}
+	return nil
+}
+
 func normalizeThemeRepo(input string) (string, string) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
 		return "", ""
 	}
-	if strings.Contains(trimmed, "://") || strings.HasPrefix(trimmed, "git@") {
+	if looksLikeGitURL(trimmed) {
 		return trimmed, themeNameFromRepo(trimmed)
 	}
 	if !strings.Contains(trimmed, "/") {
-		trimmed = "discourse/" + trimmed
+		trimmed = defaultThemeOwner + "/" + trimmed
 	}
-	url := fmt.Sprintf("https://github.com/%s.git", strings.TrimSuffix(trimmed, ".git"))
-	return url, themeNameFromRepo(trimmed)
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 {
+		return "", ""
+	}
+	cloneURL := githubRepoCloneURL(parts[0], parts[1])
+	return cloneURL, themeNameFromRepo(trimmed)
 }
 
 func themeNameFromRepo(ref string) string {

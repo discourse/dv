@@ -84,6 +84,24 @@ var newCmd = &cobra.Command{
 			}
 		}
 
+		themeInputs, _ := cmd.Flags().GetStringArray("theme")
+		themeFlags, err := resolveThemeSpecs(themeInputs)
+		if err != nil {
+			return err
+		}
+		if len(themeFlags) > 0 {
+			if tpl == nil {
+				tpl = &templateConfig{}
+			}
+			tpl.Themes = append(tpl.Themes, themeFlags...)
+			for _, input := range themeInputs {
+				if gitSpecNeedsSSH(input) {
+					tpl.Git.SSHForward = true
+					break
+				}
+			}
+		}
+
 		prFlagStr, _ := cmd.Flags().GetString("pr")
 		branchFlag, _ := cmd.Flags().GetString("branch")
 		var prFlag int
@@ -521,6 +539,9 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 
 	// Themes
 	for _, t := range tpl.Themes {
+		if t.Enabled == nil {
+			t.Enabled = boolPtr(true)
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Installing theme %s...\n", t.Repo)
 		dataDir, _ := xdg.DataDir()
 		configDir, _ := xdg.ConfigDir()
@@ -616,6 +637,7 @@ func init() {
 	newCmd.Flags().String("pr", "", "PR number or search query to checkout")
 	newCmd.Flags().String("branch", "", "Branch to checkout")
 	newCmd.Flags().StringArray("plugin", nil, "Clone plugin into the new agent (NAME, OWNER/REPO, or git URL; repeatable)")
+	newCmd.Flags().StringArray("theme", nil, "Install and enable theme/component (NAME, OWNER/REPO[#PR], git URL, or GitHub PR URL; repeatable)")
 	newCmd.Flags().Bool("without-test-db", false, "Skip test database migration during provisioning")
 
 	newCmd.RegisterFlagCompletionFunc("pr", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {

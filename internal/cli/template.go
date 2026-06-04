@@ -39,6 +39,9 @@ type templateTheme struct {
 	Repo      string `yaml:"repo"`
 	Name      string `yaml:"name"`
 	Path      string `yaml:"path"`
+	Branch    string `yaml:"branch"`
+	PR        int    `yaml:"pr"`
+	Enabled   *bool  `yaml:"enabled"`
 	AutoWatch bool   `yaml:"auto_watch"`
 }
 

@@ -54,8 +54,13 @@ func looksLikeGitURL(s string) bool {
 	return strings.Contains(s, "://") || strings.HasPrefix(s, "git@") || strings.HasPrefix(s, "ssh://")
 }
 
+func gitSpecNeedsSSH(spec string) bool {
+	trimmed := strings.TrimSpace(spec)
+	return strings.HasPrefix(trimmed, "git@") || strings.HasPrefix(trimmed, "ssh://")
+}
+
 func pluginSpecNeedsSSH(spec string) bool {
-	return strings.HasPrefix(strings.TrimSpace(spec), "git@") || strings.HasPrefix(strings.TrimSpace(spec), "ssh://")
+	return gitSpecNeedsSSH(spec)
 }
 
 func pluginRepoName(repo string) string {
