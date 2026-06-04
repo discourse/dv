@@ -3,13 +3,65 @@ package cli
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"dv/internal/docker"
 )
+
+// resolveLocalPluginMount turns a host path to a Discourse plugin into a bind
+// mount targeting plugins/<name> under the container workdir. The plugin name is
+// read from plugin.rb's "# name:" line, falling back to the directory name.
+func resolveLocalPluginMount(input, workdir string) (templateMount, string, error) {
+	name, err := localPluginName(input)
+	if err != nil {
+		return templateMount{}, "", err
+	}
+	return templateMount{Host: expandHostPath(input), Container: path.Join(workdir, "plugins", name)}, name, nil
+}
+
+// localPluginName resolves the Discourse plugin name for a local plugin path,
+// read from plugin.rb's "# name:" line (falling back to the directory name). It
+// validates that the path is a plugin directory and that the name is a single
+// clean path segment, so it can't escape the plugins/ directory.
+func localPluginName(input string) (string, error) {
+	host := expandHostPath(input)
+	info, err := os.Stat(host)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("local plugin %q is not a directory", input)
+	}
+	data, err := os.ReadFile(filepath.Join(host, "plugin.rb"))
+	if err != nil {
+		return "", fmt.Errorf("local plugin %q has no plugin.rb (not a Discourse plugin)", input)
+	}
+	name := pluginNameFromRB(data)
+	if name == "" {
+		name = filepath.Base(host)
+	}
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+		return "", fmt.Errorf("local plugin %q resolved to an invalid plugin name %q", input, name)
+	}
+	return name, nil
+}
+
+// pluginNameFromRB extracts the plugin name from a plugin.rb "# name:" line.
+func pluginNameFromRB(data []byte) string {
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if rest, ok := strings.CutPrefix(line, "name:"); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
 
 const defaultPluginOwner = "discourse"
 

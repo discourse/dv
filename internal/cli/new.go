@@ -114,6 +114,7 @@ var newCmd = &cobra.Command{
 		}
 
 		imageOverride, _ := cmd.Flags().GetString("image")
+		localPluginInputs, _ := cmd.Flags().GetStringArray("plugin-local")
 
 		name := ""
 		explicitName := len(args) == 1
@@ -125,6 +126,13 @@ var newCmd = &cobra.Command{
 				return err
 			}
 			name = uniqueAgentName(agentNameSlug(targetBranch))
+		} else if len(localPluginInputs) > 0 {
+			// Name the agent after the local plugin instead of a generic autogen name.
+			pname, err := localPluginName(localPluginInputs[0])
+			if err != nil {
+				return err
+			}
+			name = uniqueAgentName(agentNameSlug(pname))
 		}
 		if name == "" {
 			name = autogenName()
@@ -183,6 +191,32 @@ var newCmd = &cobra.Command{
 		}
 		imageTag := imgCfg.Tag
 		workdir := imgCfg.Workdir
+
+		// Local plugins are bind-mounted into plugins/<name>; no clone needed.
+		if len(localPluginInputs) > 0 {
+			if tpl == nil {
+				tpl = &templateConfig{}
+			}
+			// Track plugin slots already claimed by cloned --plugin entries so a
+			// local mount can't silently collide with (or clobber) a clone or
+			// another local plugin that resolves to the same plugins/<name>.
+			seen := map[string]string{}
+			for _, p := range tpl.Plugins {
+				seen[strings.TrimPrefix(p.Path, "plugins/")] = "a cloned plugin"
+			}
+			for _, input := range localPluginInputs {
+				mount, name, mErr := resolveLocalPluginMount(input, workdir)
+				if mErr != nil {
+					return mErr
+				}
+				if prev, ok := seen[name]; ok {
+					return fmt.Errorf("plugin slot plugins/%s is claimed by both %s and %q", name, prev, input)
+				}
+				seen[name] = fmt.Sprintf("%q", input)
+				fmt.Fprintf(cmd.OutOrStdout(), "Bind-mounting local plugin %s -> %s\n", mount.Host, mount.Container)
+				tpl.Mounts = append(tpl.Mounts, mount)
+			}
+		}
 
 		sshAuthSock := ""
 		if tpl != nil && tpl.Git.SSHForward {
@@ -637,6 +671,7 @@ func init() {
 	newCmd.Flags().String("pr", "", "PR number or search query to checkout")
 	newCmd.Flags().String("branch", "", "Branch to checkout")
 	newCmd.Flags().StringArray("plugin", nil, "Clone plugin into the new agent (NAME, OWNER/REPO, or git URL; repeatable)")
+	newCmd.Flags().StringArray("plugin-local", nil, "Bind-mount a local plugin directory into the new agent (PATH to a plugin repo; repeatable)")
 	newCmd.Flags().StringArray("theme", nil, "Install and enable theme/component (NAME, OWNER/REPO[#PR], git URL, or GitHub PR URL; repeatable)")
 	newCmd.Flags().Bool("without-test-db", false, "Skip test database migration during provisioning")
 
