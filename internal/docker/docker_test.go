@@ -447,3 +447,42 @@ func TestEnsureMountHostPathsLeavesExistingFileAlone(t *testing.T) {
 		t.Errorf("file contents changed: got %q", contents)
 	}
 }
+
+func TestParseContainerMounts(t *testing.T) {
+	t.Parallel()
+
+	input := `[
+	  {"Type":"bind","Source":"/Users/a/work/plugin","Destination":"/var/www/discourse/plugins/p","RW":true},
+	  {"Type":"bind","Source":"/etc/cfg","Destination":"/etc/cfg","RW":false},
+	  {"Type":"bind","Source":"/run/host-services/ssh-auth.sock","Destination":"/tmp/ssh-agent.sock","RW":true},
+	  {"Type":"volume","Source":"/var/lib/docker/volumes/x/_data","Destination":"/data","RW":true}
+	]`
+
+	got, err := parseContainerMounts([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Mount{
+		{Host: "/Users/a/work/plugin", Container: "/var/www/discourse/plugins/p", ReadOnly: false},
+		{Host: "/etc/cfg", Container: "/etc/cfg", ReadOnly: true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d mounts, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("mount %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseContainerMountsEmpty(t *testing.T) {
+	t.Parallel()
+	got, err := parseContainerMounts([]byte(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no mounts, got %+v", got)
+	}
+}
