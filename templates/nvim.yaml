@@ -1,0 +1,54 @@
+# Neovim dev environment for dv agents.
+#
+# Installs the latest stable Neovim and copies your host Neovim config into the
+# container. Works regardless of host OS: the config path (~/.config/nvim) is the
+# same on macOS and Linux, and the CPU architecture is detected inside the
+# container, so the right Neovim build is fetched whether the container is arm64
+# (Apple Silicon hosts) or x86_64 (Intel/Linux hosts).
+#
+# Usage:
+#   dv new --template ./templates/nvim.yaml my-agent
+#   # or make it the default for every `dv new`:
+#   dv config defaultTemplate ./templates/nvim.yaml
+
+# Copy your host Neovim config into the container at create time.
+#
+# Only the *config* is copied — never ~/.local/share/nvim or ~/.cache/nvim:
+# those hold compiled artifacts (treesitter parsers, etc.) built for your host
+# OS/arch and won't run inside the (Linux) container. The container builds its
+# own plugin set on first `nvim` launch.
+copy:
+  - host: "~/.config/nvim"
+    container: "/home/discourse/.config/nvim"
+
+# Install Neovim from the official "stable" release.
+#
+# Debian's apt ships Neovim 0.7.2, which is too old for most modern configs
+# (lazy.nvim and friends need 0.9+), so we fetch the stable tarball instead and
+# pick the asset matching the container's architecture. build-essential is
+# installed only if a C compiler isn't already present, so treesitter parsers
+# can compile.
+#
+# The install is best-effort: if the download fails (e.g. flaky network) it
+# warns and leaves the agent intact rather than tearing down a fully provisioned
+# Discourse — re-run the snippet later or recreate the agent.
+on_create:
+  - |
+    case "$(uname -m)" in
+      aarch64|arm64) arch=arm64 ;;
+      *)             arch=x86_64 ;;
+    esac
+    url="https://github.com/neovim/neovim/releases/download/stable/nvim-linux-${arch}.tar.gz"
+    install_nvim() {
+      curl -fsSL --retry 3 --retry-delay 2 -o /tmp/nvim.tar.gz "$url" || return 1
+      sudo rm -rf /opt/nvim && sudo mkdir -p /opt/nvim || return 1
+      sudo tar -xzf /tmp/nvim.tar.gz -C /opt/nvim --strip-components=1 || return 1
+      sudo ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim || return 1
+      rm -f /tmp/nvim.tar.gz
+      command -v cc >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y build-essential; } || true
+    }
+    if install_nvim; then
+      echo "Neovim installed: $(nvim --version | head -1)"
+    else
+      echo "WARNING: Neovim install failed; agent created without nvim. Re-run the install later." >&2
+    fi
