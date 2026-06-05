@@ -379,7 +379,7 @@ var agentRules = map[string]agentRule{
 	"codex": {
 		interactive: func() []string { return []string{"codex"} },
 		withPrompt:  func(p string) []string { return []string{"codex", "exec", "-s", "danger-full-access", p} },
-		defaults:    []string{"--search", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access", "-c", "model_reasoning_effort=xhigh", "-m", "gpt-5.4"},
+		defaults:    []string{"--search", "--dangerously-bypass-approvals-and-sandbox", "--sandbox", "danger-full-access", "-c", "model_reasoning_effort=xhigh", "-m", "gpt-5.5"},
 	},
 	"claude": {
 		interactive: func() []string { return []string{"claude"} },
