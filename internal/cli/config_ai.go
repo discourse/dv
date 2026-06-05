@@ -33,14 +33,26 @@ var aiFeatureSettings = []string{
 	"ai_translation_enabled",
 }
 
-var configAICmd = &cobra.Command{
-	Use:   "ai",
-	Short: "Configure Discourse AI LLMs via a delightful TUI",
-	Long: `Configure Discourse AI LLMs via a delightful TUI.
+type aiConfigRuntime struct {
+	containerName string
+	discourseRoot string
+	client        *discourse.ClientWrapper
+}
 
-This command launches an interactive interface to configure AI language models
-for your Discourse instance. You can add, edit, test, and manage LLM providers
-including OpenAI, Anthropic, OpenRouter, and more.
+var configAICmd = &cobra.Command{
+	Use:   "ai [config.json|alias]",
+	Short: "Configure Discourse AI LLMs via a delightful TUI or JSON file",
+	Long: `Configure Discourse AI LLMs via a delightful TUI or JSON file.
+
+With no arguments this command launches an interactive interface to configure AI
+language models for your Discourse instance. You can add, edit, test, and manage
+LLM providers including OpenAI, Anthropic, OpenRouter, and more.
+
+Pass a JSON file (or an alias under ~/.config/dv/ai/) to apply LLM configuration
+non-interactively, for example:
+
+  dv config ai ./cdck_qwen.json
+  dv config ai cdck_qwen
 
 ENVIRONMENT VARIABLES
 
@@ -74,89 +86,123 @@ AWS Bedrock:
 
 These environment variables are automatically populated in API key fields when
 configuring new models, and are passed to the container when testing connections.
+
+JSON files may also refer to secrets via api_key_ref (op://...), api_key_env, or
+api_key. Secret values are never printed.
 `,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeAIConfigArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configDir, err := xdg.ConfigDir()
-		if err != nil {
-			return err
+		if len(args) > 0 {
+			return runConfigAIFile(cmd, args[0])
 		}
-		cfg, err := config.LoadOrCreate(configDir)
-		if err != nil {
-			return err
-		}
-
-		containerOverride, _ := cmd.Flags().GetString("container")
-		containerName := strings.TrimSpace(containerOverride)
-		if containerName == "" {
-			containerName = currentAgentName(cfg)
-		}
-		if containerName == "" {
-			fmt.Fprintln(cmd.ErrOrStderr(), "No container selected. Run 'dv start' or pass --container.")
-			return nil
-		}
-
-		if !docker.Exists(containerName) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist. Run 'dv start' first.\n", containerName)
-			return nil
-		}
-		if !docker.Running(containerName) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
-			if err := docker.Start(containerName); err != nil {
-				return err
-			}
-		}
-
-		imgName := cfg.ContainerImages[containerName]
-		var imgCfg config.ImageConfig
-		if imgName != "" {
-			imgCfg = cfg.Images[imgName]
-		} else {
-			_, resolved, err := resolveImage(cfg, "")
-			if err != nil {
-				return err
-			}
-			imgCfg = resolved
-		}
-		discourseRoot := strings.TrimSpace(imgCfg.Workdir)
-		if discourseRoot == "" {
-			discourseRoot = "/var/www/discourse"
-		}
-
-		verbose, _ := cmd.Flags().GetBool("verbose")
-		client, err := discourse.NewClientWrapper(containerName, cfg, collectEnvPassthrough(cfg), verbose)
-		if err != nil {
-			return fmt.Errorf("create discourse client: %w", err)
-		}
-
-		cacheDir, err := xdg.CacheDir()
-		if err != nil {
-			return err
-		}
-		providerCache := filepath.Join(cacheDir, "ai_models")
-		env := map[string]string{}
-		for _, kv := range os.Environ() {
-			parts := strings.SplitN(kv, "=", 2)
-			if len(parts) == 2 {
-				env[parts[0]] = parts[1]
-			}
-		}
-
-		model := newAiConfigModel(aiConfigOptions{
-			client:       client,
-			env:          env,
-			container:    containerName,
-			discourseDir: discourseRoot,
-			ctx:          cmd.Context(),
-			loadingState: true,
-			cacheDir:     providerCache,
-		})
-
-		program := tea.NewProgram(model, tea.WithContext(cmd.Context()))
-		if _, runErr := program.Run(); runErr != nil {
-			return runErr
-		}
-		return nil
+		return runConfigAITUI(cmd)
 	},
+}
+
+func runConfigAITUI(cmd *cobra.Command) error {
+	runtime, err := setupAIConfigRuntime(cmd)
+	if err != nil {
+		return err
+	}
+	if runtime.client == nil {
+		return nil
+	}
+
+	cacheDir, err := xdg.CacheDir()
+	if err != nil {
+		return err
+	}
+	providerCache := filepath.Join(cacheDir, "ai_models")
+
+	model := newAiConfigModel(aiConfigOptions{
+		client:       runtime.client,
+		env:          currentEnvironmentMap(),
+		container:    runtime.containerName,
+		discourseDir: runtime.discourseRoot,
+		ctx:          cmd.Context(),
+		loadingState: true,
+		cacheDir:     providerCache,
+	})
+
+	program := tea.NewProgram(model, tea.WithContext(cmd.Context()))
+	if _, runErr := program.Run(); runErr != nil {
+		return runErr
+	}
+	return nil
+}
+
+func setupAIConfigRuntime(cmd *cobra.Command) (aiConfigRuntime, error) {
+	var runtime aiConfigRuntime
+
+	configDir, err := xdg.ConfigDir()
+	if err != nil {
+		return runtime, err
+	}
+
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		return runtime, err
+	}
+
+	containerOverride, _ := cmd.Flags().GetString("container")
+	containerName := strings.TrimSpace(containerOverride)
+	if containerName == "" {
+		containerName = currentAgentName(cfg)
+	}
+	if containerName == "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No container selected. Run 'dv start' or pass --container.")
+		return runtime, nil
+	}
+	runtime.containerName = containerName
+
+	if !docker.Exists(containerName) {
+		fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist. Run 'dv start' first.\n", containerName)
+		return runtime, nil
+	}
+	if !docker.Running(containerName) {
+		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
+		if err := docker.Start(containerName); err != nil {
+			return runtime, err
+		}
+	}
+
+	imgName := cfg.ContainerImages[containerName]
+	var imgCfg config.ImageConfig
+	if imgName != "" {
+		imgCfg = cfg.Images[imgName]
+	} else {
+		_, resolved, err := resolveImage(cfg, "")
+		if err != nil {
+			return runtime, err
+		}
+		imgCfg = resolved
+	}
+	discourseRoot := strings.TrimSpace(imgCfg.Workdir)
+	if discourseRoot == "" {
+		discourseRoot = "/var/www/discourse"
+	}
+	runtime.discourseRoot = discourseRoot
+
+	verbose, _ := cmd.Flags().GetBool("verbose")
+	client, err := discourse.NewClientWrapper(containerName, cfg, collectEnvPassthrough(cfg), verbose)
+	if err != nil {
+		return runtime, fmt.Errorf("create discourse client: %w", err)
+	}
+	runtime.client = client
+
+	return runtime, nil
+}
+
+func currentEnvironmentMap() map[string]string {
+	env := map[string]string{}
+	for _, kv := range os.Environ() {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) == 2 {
+			env[parts[0]] = parts[1]
+		}
+	}
+	return env
 }
 
 func init() {

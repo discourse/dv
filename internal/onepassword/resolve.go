@@ -2,6 +2,7 @@ package onepassword
 
 import (
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 )
@@ -12,13 +13,20 @@ func IsReference(s string) bool {
 }
 
 // Read fetches a secret from 1Password using `op read <reference>`.
+//
+// Secret references may include an account selector as a query parameter, e.g.
+// `op://Vault/Item/field?account=example.1password.com`. The 1Password CLI
+// expects that selector as `--account`, so Read translates it before invoking
+// `op read`.
+//
 // Returns an error if the op CLI is not available or the reference is invalid.
 func Read(reference string) (string, error) {
 	if !IsReference(reference) {
 		return "", fmt.Errorf("not a 1Password reference: %s", reference)
 	}
 
-	cmd := exec.Command("op", "read", reference)
+	args := opReadArgs(reference)
+	cmd := exec.Command("op", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -28,6 +36,40 @@ func Read(reference string) (string, error) {
 	}
 
 	return strings.TrimSpace(string(out)), nil
+}
+
+func opReadArgs(reference string) []string {
+	ref, account := splitAccountSelector(reference)
+	args := []string{"read"}
+	if account != "" {
+		args = append(args, "--account", account)
+	}
+	return append(args, ref)
+}
+
+func splitAccountSelector(reference string) (string, string) {
+	queryStart := strings.Index(reference, "?")
+	if queryStart == -1 {
+		return reference, ""
+	}
+
+	base := reference[:queryStart]
+	rawQuery := reference[queryStart+1:]
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return reference, ""
+	}
+
+	account := strings.TrimSpace(query.Get("account"))
+	if account == "" {
+		return reference, ""
+	}
+
+	query.Del("account")
+	if encoded := query.Encode(); encoded != "" {
+		base += "?" + encoded
+	}
+	return base, account
 }
 
 // CLIAvailable checks if the 1Password CLI is installed and accessible.
