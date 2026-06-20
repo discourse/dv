@@ -74,3 +74,31 @@ func TestConfirmInvalidRailsHostname(t *testing.T) {
 		}
 	})
 }
+
+func TestNewFailureCleanupGuards(t *testing.T) {
+	t.Parallel()
+
+	err := errTestNewFailure{}
+	if !shouldCleanupNewContainer(err, true, false, false) {
+		t.Fatal("expected provisioning failure to clean up created container")
+	}
+	if shouldCleanupNewContainer(err, true, true, false) {
+		t.Fatal("expected post-provision hook failure not to clean up created container")
+	}
+	if shouldCleanupNewContainer(err, true, false, true) {
+		t.Fatal("expected keep-on-failure to skip cleanup")
+	}
+	if shouldCleanupNewContainer(nil, true, false, false) {
+		t.Fatal("expected nil error to skip cleanup")
+	}
+	if !shouldRollbackNewSelection(err, false) {
+		t.Fatal("expected provisioning failure to roll back selection")
+	}
+	if shouldRollbackNewSelection(err, true) {
+		t.Fatal("expected post-provision hook failure not to roll back selection")
+	}
+}
+
+type errTestNewFailure struct{}
+
+func (errTestNewFailure) Error() string { return "boom" }

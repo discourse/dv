@@ -94,7 +94,7 @@ into Discourse once ready. The container workdir is updated so 'dv enter' opens 
 		}
 		if !docker.Running(containerName) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
-			if err := docker.Start(containerName); err != nil {
+			if err := startContainerWithPostStartHook(cmd, cfg, configDir, containerName, "config ai-tool"); err != nil {
 				return err
 			}
 		}

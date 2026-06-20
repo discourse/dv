@@ -59,7 +59,7 @@ var restartCmd = &cobra.Command{
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", name)
-		if err := docker.Start(name); err != nil {
+		if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "restart"); err != nil {
 			return err
 		}
 

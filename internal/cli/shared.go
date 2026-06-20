@@ -380,6 +380,14 @@ func warnActiveSessions(cmd *cobra.Command, name string, force bool) (bool, erro
 	return promptYesNo(cmd.InOrStdin(), cmd.ErrOrStderr(), "Continue? (y/N): ")
 }
 
+type containerLifecycleResult struct {
+	Created       bool
+	Started       bool
+	HostPort      int
+	ContainerPort int
+	Workdir       string
+}
+
 func ensureContainerRunning(cmd *cobra.Command, cfg config.Config, name string, reset bool, sshAuthSock string) error {
 	// Fallback: if container has a recorded image, use that; else use selected image
 	imgName := cfg.ContainerImages[name]
@@ -389,10 +397,36 @@ func ensureContainerRunning(cmd *cobra.Command, cfg config.Config, name string, 
 	}
 	workdir := imgCfg.Workdir
 	imageTag := imgCfg.Tag
-	return ensureContainerRunningWithWorkdir(cmd, cfg, name, workdir, imageTag, imgName, reset, sshAuthSock, nil, nil)
+	result, err := ensureContainerRunningWithWorkdirResult(cmd, cfg, name, workdir, imageTag, imgName, reset, sshAuthSock, nil, nil)
+	if err != nil {
+		return err
+	}
+	if result.Created || result.Started {
+		configDir, _ := xdg.ConfigDir()
+		hookCtx := hostHookContext{
+			CommandName:   cmd.Name(),
+			ContainerName: name,
+			ImageName:     imgName,
+			ImageTag:      imageTag,
+			Workdir:       result.Workdir,
+			HostPort:      result.HostPort,
+			ContainerPort: result.ContainerPort,
+			ConfigDir:     configDir,
+		}
+		if result.Created {
+			if err := runHostHooksForContainer(cmd, cfg, hostHookPostCreate, hookCtx); err != nil {
+				return err
+			}
+		}
+		if result.Started {
+			return runHostHooksForContainer(cmd, cfg, hostHookPostStart, hookCtx)
+		}
+	}
+	return nil
 }
 
-func ensureContainerRunningWithWorkdir(cmd *cobra.Command, cfg config.Config, name string, workdir string, imageTag string, imgName string, reset bool, sshAuthSock string, templateEnvs map[string]string, templateMounts []docker.Mount) error {
+func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Config, name string, workdir string, imageTag string, imgName string, reset bool, sshAuthSock string, templateEnvs map[string]string, templateMounts []docker.Mount) (containerLifecycleResult, error) {
+	result := containerLifecycleResult{ContainerPort: cfg.ContainerPort, Workdir: workdir}
 	if reset && docker.Exists(name) {
 		_ = docker.Stop(name)
 		_ = docker.Remove(name)
@@ -433,18 +467,25 @@ func ensureContainerRunningWithWorkdir(cmd *cobra.Command, cfg config.Config, na
 			extraHosts = append(extraHosts, fmt.Sprintf("%s:127.0.0.1", proxyHost))
 		}
 		if err := docker.RunDetached(name, workdir, imageTag, chosenPort, cfg.ContainerPort, labels, envs, extraHosts, sshAuthSock, templateMounts); err != nil {
-			return err
+			return result, err
 		}
+		result.Created = true
+		result.Started = true
+		result.HostPort = chosenPort
 		if proxyHost != "" {
 			registerWithLocalProxy(cmd, cfg, name, proxyHost, cfg.ContainerPort)
 		}
 	} else if !docker.Running(name) {
 		if err := docker.Start(name); err != nil {
-			return err
+			return result, err
+		}
+		result.Started = true
+		if hostPort, err := docker.GetContainerHostPort(name, cfg.ContainerPort); err == nil {
+			result.HostPort = hostPort
 		}
 		registerContainerFromLabels(cmd, cfg, name)
 	} else {
 		registerContainerFromLabels(cmd, cfg, name)
 	}
-	return nil
+	return result, nil
 }

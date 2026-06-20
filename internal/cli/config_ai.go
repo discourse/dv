@@ -162,7 +162,7 @@ func setupAIConfigRuntime(cmd *cobra.Command) (aiConfigRuntime, error) {
 	}
 	if !docker.Running(containerName) {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
-		if err := docker.Start(containerName); err != nil {
+		if err := startContainerWithPostStartHook(cmd, cfg, configDir, containerName, "config ai"); err != nil {
 			return runtime, err
 		}
 	}

@@ -88,7 +88,7 @@ theme root so AI tooling understands the layout.`,
 		}
 		if !docker.Running(containerName) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
-			if err := docker.Start(containerName); err != nil {
+			if err := startContainerWithPostStartHook(cmd, cfg, configDir, containerName, "config theme"); err != nil {
 				return err
 			}
 		}

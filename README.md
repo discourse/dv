@@ -139,6 +139,7 @@ dv start [--reset] [--name NAME] [--image NAME] [--host-starting-port N] [--cont
 Notes:
 - Maps host `3000` → container `3000` (Rails) by default. Override with flags.
 - Performs a pre-flight check and picks the next free port if needed.
+- Runs configured `postCreate`/`postStart` host hooks when it creates or starts a container (set `DV_NO_HOOKS=1` to skip). `postCreate` also runs if `dv start` has to recreate a stopped container for automatic port remapping.
 
 ### dv stop
 Stop the selected or specified container.
@@ -370,7 +371,7 @@ Templates support:
 - **Plugins & Themes**: Automatically clone plugins and install/enable/watch themes.
 - **Site Settings**: Set Discourse settings (title, theme, experimental features) on boot.
 - **Copy Rules**: Sync host files (like `.gitconfig` or API keys) into the container.
-- **Provisioning**: Run arbitrary bash commands via `on_create`.
+- **Provisioning**: Run arbitrary bash commands inside the container via `on_create`.
 - **MCP Servers**: Register Model Context Protocol servers for AI agents.
 
 See [templates/full.yaml](./templates/full.yaml) for a complete example of all available features.
@@ -543,6 +544,39 @@ Use `dv config site_settings FILENAME.yaml` to apply Discourse site settings fro
 
 #### Local proxy (NAME.dv.localhost)
 Run `dv config local-proxy` to build and start a small reverse proxy container (`dv-local-proxy` by default) that maps each new agent to `NAME.dv.localhost` instead of host ports like `localhost:3000`. By default, the proxy listens on localhost only (port 80 for HTTP, 2080 for admin API) for security. Use `--hostname dev.home.arpa` to use `NAME.dev.home.arpa` instead, and use `--public` to bind to all network interfaces. Use `--https` to enable HTTPS on port 443 via a local mkcert certificate (HTTP will redirect to HTTPS). The proxy registers containers as you create/start them and injects hostname env vars so Discourse assets resolve correctly; when `--https` is enabled, new stock Discourse containers also configure their in-container Caddy with the proxy hostname/wildcard and trust Caddy's local CA in Chromium's NSS DB. Stop or remove the proxy container to go back to host-port URLs; only containers created while the proxy is running adopt the hostname.
+
+#### Host lifecycle hooks
+Configure host-side lifecycle hooks in `~/.config/dv/config.json` when you need local automation to run after containers are created or started. Hooks run with `/bin/sh -c` on the host (not inside the container), receive `DV_*` environment variables, and are skipped entirely when `DV_NO_HOOKS=1` is set. `dv` also sets `DV_NO_HOOKS=1` inside the hook subprocess so hooks that call `dv` do not recursively trigger more hooks unless they explicitly override it.
+
+```json
+{
+  "hooks": {
+    "postCreate": [
+      { "command": "~/.config/dv/hooks/post-create", "timeoutSeconds": 60 }
+    ],
+    "postStart": [
+      { "command": "~/.config/dv/hooks/post-start", "ignoreErrors": true }
+    ]
+  }
+}
+```
+
+- `postCreate` runs after `dv` creates or recreates a container (for example `dv start`, `dv start --reset`, or `dv new`). For `dv new`, hooks run after the full provisioning/template flow completes, not immediately after the Docker container is created.
+- `postStart` runs after `dv` starts a stopped container, including the initial start after creation. It does not run when the container was already running.
+- Hooks run in order; set `"enabled": false` to disable an entry without deleting it. By default hook failures stop the command; set `"ignoreErrors": true` to warn and continue.
+- Hooks inherit the `dv` process environment, so keep hook scripts trusted if your shell exports API keys or tokens. Hooks also run when containers are created/started via `dv serve`; treat the serve bearer token as permission to trigger any configured host hooks, especially when using `dv serve --public`.
+- `postStart` runs before `copyRules` are applied by `dv enter`, `dv run`, or `dv run-agent`.
+- Available environment variables include `DV_HOOK`, `DV_COMMAND` (informational command/action name), `DV_CONTAINER_NAME`, `DV_IMAGE_NAME`, `DV_IMAGE_TAG`, `DV_WORKDIR`, `DV_HOST_PORT`, `DV_CONTAINER_PORT`, `DV_CONFIG_DIR`, `DV_DATA_DIR`, `DV_HOOK_INDEX` (zero-based execution index), and `DV_NO_HOOKS=1` (set for the hook subprocess to avoid recursion).
+- The shell also receives positional arguments for convenience: `$1` container name, `$2` host port, `$3` container port, `$4` hook name, `$5` image name, `$6` image tag, and `$7` workdir. If `command` is a script path and you prefer argv, configure it as `"~/.config/dv/hooks/post-create \"$@\""`; otherwise read the `DV_*` environment variables in the script.
+
+Example hook script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Container $DV_CONTAINER_NAME is available at http://127.0.0.1:$DV_HOST_PORT"
+```
 
 #### Copying host files before enter/run-agent
 Use `copyRules` in your config to copy host files into the container. Each rule sets a host path (supports `~`, env vars, and globs) and a container destination, plus optional `agents` to only copy when that agent is run via `dv run-agent`. Unscoped rules run for `dv enter`/`dv run`; agent-scoped rules skip those commands.

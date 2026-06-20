@@ -51,9 +51,32 @@ type Config struct {
 	// agent scoping.
 	CopyRules []CopyRule `json:"copyRules,omitempty"`
 
+	// Hooks defines host-side lifecycle commands run by dv.
+	Hooks HooksConfig `json:"hooks,omitempty"`
+
 	// Agents defines user-provided run-agent shortcuts. Keys are the names used
 	// with `dv run-agent` / `dv ra`.
 	Agents map[string]AgentConfig `json:"agents,omitempty"`
+}
+
+// HooksConfig stores host-side lifecycle hooks.
+type HooksConfig struct {
+	// PostCreate runs after dv creates/recreates a container.
+	PostCreate []HostHook `json:"postCreate,omitempty"`
+	// PostStart runs after dv starts a container, including immediately after creation.
+	PostStart []HostHook `json:"postStart,omitempty"`
+}
+
+// HostHook describes a shell command run on the host for a lifecycle hook.
+type HostHook struct {
+	// Command is executed on the host with /bin/sh -c and receives DV_* env vars.
+	Command string `json:"command"`
+	// Enabled defaults to true when omitted.
+	Enabled *bool `json:"enabled,omitempty"`
+	// IgnoreErrors logs failures and continues when true.
+	IgnoreErrors bool `json:"ignoreErrors,omitempty"`
+	// TimeoutSeconds optionally bounds command runtime; <=0 means no timeout.
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 }
 
 // AgentConfig describes a BYO agent command for `dv run-agent`.

@@ -266,6 +266,10 @@ func handleContainerCreate(w http.ResponseWriter, r *http.Request, configDir str
 		logger := func(line string) {
 			fmt.Fprint(stdout, line)
 		}
+		hookCmd := newHostHookCommand("serve", strings.NewReader(""), stdout, stderr)
+		createdContainer := false
+		startedContainer := false
+		hookHostPort := 0
 		if req.Reset && docker.Exists(name) {
 			logger(fmt.Sprintf("Stopping and removing container '%s'...\n", name))
 			_ = docker.Stop(name)
@@ -292,9 +296,12 @@ func handleContainerCreate(w http.ResponseWriter, r *http.Request, configDir str
 			if err := docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, containerPort, labels, envs, nil, "", nil); err != nil {
 				return err
 			}
+			createdContainer = true
+			startedContainer = true
+			hookHostPort = chosenPort
 		} else if !docker.Running(name) {
 			logger(fmt.Sprintf("Starting existing container '%s'...\n", name))
-			if err := docker.Start(name); err != nil {
+			if err := startContainerWithPostStartHook(hookCmd, cfg, configDir, name, "serve start"); err != nil {
 				return err
 			}
 		} else {
@@ -306,6 +313,36 @@ func handleContainerCreate(w http.ResponseWriter, r *http.Request, configDir str
 		}
 		cfg.ContainerImages[name] = imgName
 		_ = config.Save(configDir, cfg)
+		if createdContainer {
+			hookCtx := hostHookContext{
+				CommandName:   "serve start",
+				ContainerName: name,
+				ImageName:     imgName,
+				ImageTag:      imgCfg.Tag,
+				Workdir:       workdir,
+				HostPort:      hookHostPort,
+				ContainerPort: containerPort,
+				ConfigDir:     configDir,
+			}
+			if err := runHostHooksForContainer(hookCmd, cfg, hostHookPostCreate, hookCtx); err != nil {
+				return err
+			}
+		}
+		if createdContainer && startedContainer {
+			hookCtx := hostHookContext{
+				CommandName:   "serve start",
+				ContainerName: name,
+				ImageName:     imgName,
+				ImageTag:      imgCfg.Tag,
+				Workdir:       workdir,
+				HostPort:      hookHostPort,
+				ContainerPort: containerPort,
+				ConfigDir:     configDir,
+			}
+			if err := runHostHooksForContainer(hookCmd, cfg, hostHookPostStart, hookCtx); err != nil {
+				return err
+			}
+		}
 		return nil
 	}, true)
 }
@@ -335,7 +372,7 @@ func handleContainer(w http.ResponseWriter, r *http.Request, configDir string, p
 		case "stop":
 			handleContainerStop(w, r, name)
 		case "restart":
-			handleContainerRestart(w, r, name)
+			handleContainerRestart(w, r, configDir, name)
 		case "select":
 			handleContainerSelect(w, r, configDir, name)
 		case "rename":
@@ -432,6 +469,7 @@ func handleContainerStart(w http.ResponseWriter, r *http.Request, configDir, nam
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
 		logger := func(line string) { fmt.Fprint(stdout, line) }
+		hookCmd := newHostHookCommand("serve", strings.NewReader(""), stdout, stderr)
 		if req.Reset && docker.Exists(name) {
 			logger(fmt.Sprintf("Resetting container '%s'...\n", name))
 			_ = docker.Stop(name)
@@ -452,11 +490,27 @@ func handleContainerStart(w http.ResponseWriter, r *http.Request, configDir, nam
 				"DISCOURSE_PORT": strconv.Itoa(chosenPort),
 			}
 			logger(fmt.Sprintf("Creating and starting container '%s'...\n", name))
-			return docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, cfg.ContainerPort, labels, envs, nil, "", nil)
+			if err := docker.RunDetached(name, workdir, imgCfg.Tag, chosenPort, cfg.ContainerPort, labels, envs, nil, "", nil); err != nil {
+				return err
+			}
+			hookCtx := hostHookContext{
+				CommandName:   "serve start",
+				ContainerName: name,
+				ImageName:     imgName,
+				ImageTag:      imgCfg.Tag,
+				Workdir:       workdir,
+				HostPort:      chosenPort,
+				ContainerPort: cfg.ContainerPort,
+				ConfigDir:     configDir,
+			}
+			if err := runHostHooksForContainer(hookCmd, cfg, hostHookPostCreate, hookCtx); err != nil {
+				return err
+			}
+			return runHostHooksForContainer(hookCmd, cfg, hostHookPostStart, hookCtx)
 		}
 		if !docker.Running(name) {
 			logger(fmt.Sprintf("Starting container '%s'...\n", name))
-			return docker.Start(name)
+			return startContainerWithPostStartHook(hookCmd, cfg, configDir, name, "serve start")
 		}
 		logger(fmt.Sprintf("Container '%s' already running.\n", name))
 		return nil
@@ -474,8 +528,14 @@ func handleContainerStop(w http.ResponseWriter, r *http.Request, name string) {
 	}, true)
 }
 
-func handleContainerRestart(w http.ResponseWriter, r *http.Request, name string) {
+func handleContainerRestart(w http.ResponseWriter, r *http.Request, configDir, name string) {
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	streamExec(w, func(stdout, stderr io.Writer) error {
+		hookCmd := newHostHookCommand("serve", strings.NewReader(""), stdout, stderr)
 		if docker.Running(name) {
 			fmt.Fprintf(stdout, "Stopping container '%s'...\n", name)
 			if err := docker.Stop(name); err != nil {
@@ -483,7 +543,7 @@ func handleContainerRestart(w http.ResponseWriter, r *http.Request, name string)
 			}
 		}
 		fmt.Fprintf(stdout, "Starting container '%s'...\n", name)
-		return docker.Start(name)
+		return startContainerWithPostStartHook(hookCmd, cfg, configDir, name, "serve restart")
 	}, true)
 }
 
@@ -616,33 +676,29 @@ func handleContainerRun(w http.ResponseWriter, r *http.Request, configDir, name 
 		return
 	}
 
-	ctx, err := ensureContainerExecContext(configDir, name)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	workdir := ctx.workdir
-	if strings.TrimSpace(req.Workdir) != "" {
-		workdir = req.Workdir
-	}
-
-	envs := append(docker.Envs{}, ctx.envs...)
-	for k, v := range req.Env {
-		if strings.TrimSpace(k) == "" {
-			continue
-		}
-		envs = append(envs, fmt.Sprintf("%s=%s", k, v))
-	}
-
 	argv := []string{"bash", "-lc", req.Cmd}
-	if req.AsRoot {
-		streamExec(w, func(stdout, stderr io.Writer) error {
-			return execStreamAsUserContext(r.Context(), "root", name, workdir, envs, argv, stdout, stderr)
-		}, true)
-		return
-	}
 	streamExec(w, func(stdout, stderr io.Writer) error {
+		ctx, err := ensureContainerExecContext(configDir, name, stdout, stderr)
+		if err != nil {
+			return err
+		}
+
+		workdir := ctx.workdir
+		if strings.TrimSpace(req.Workdir) != "" {
+			workdir = req.Workdir
+		}
+
+		envs := append(docker.Envs{}, ctx.envs...)
+		for k, v := range req.Env {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			envs = append(envs, fmt.Sprintf("%s=%s", k, v))
+		}
+
+		if req.AsRoot {
+			return execStreamAsUserContext(r.Context(), "root", name, workdir, envs, argv, stdout, stderr)
+		}
 		return docker.ExecStreamContext(r.Context(), name, workdir, envs, argv, stdout, stderr)
 	}, true)
 }
@@ -668,32 +724,31 @@ func handleContainerRunAgent(w http.ResponseWriter, r *http.Request, configDir, 
 		return
 	}
 	agent = resolveAgentAliasWithConfig(cfg, agent)
-	ctx, err := ensureContainerExecContext(configDir, name)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	workdir := ctx.workdir
-
-	cmdStub := &cobra.Command{}
-	cmdStub.SetOut(io.Discard)
-	cmdStub.SetErr(io.Discard)
-	copyConfiguredFiles(cmdStub, cfg, name, workdir, agent)
-	envs := buildAgentEnv(cfg, agent)
-
-	var argv []string
-	if len(req.RawArgs) > 0 {
-		argv = buildAgentRawWithConfig(cfg, agent, req.RawArgs)
-	} else if strings.TrimSpace(req.Prompt) == "" {
-		argv = buildAgentInteractiveWithConfig(cfg, agent)
-	} else {
-		argv = buildAgentArgsWithConfig(cfg, agent, req.Prompt)
-	}
-
-	shellCmd := withUserPaths(shellJoin(argv))
-	finalArgs := []string{"bash", "-lc", shellCmd}
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
+		ctx, err := ensureContainerExecContext(configDir, name, stdout, stderr)
+		if err != nil {
+			return err
+		}
+		workdir := ctx.workdir
+
+		cmdStub := &cobra.Command{}
+		cmdStub.SetOut(io.Discard)
+		cmdStub.SetErr(io.Discard)
+		copyConfiguredFiles(cmdStub, cfg, name, workdir, agent)
+		envs := buildAgentEnv(cfg, agent)
+
+		var argv []string
+		if len(req.RawArgs) > 0 {
+			argv = buildAgentRawWithConfig(cfg, agent, req.RawArgs)
+		} else if strings.TrimSpace(req.Prompt) == "" {
+			argv = buildAgentInteractiveWithConfig(cfg, agent)
+		} else {
+			argv = buildAgentArgsWithConfig(cfg, agent, req.Prompt)
+		}
+
+		shellCmd := withUserPaths(shellJoin(argv))
+		finalArgs := []string{"bash", "-lc", shellCmd}
 		return docker.ExecStreamContext(r.Context(), name, workdir, envs, finalArgs, stdout, stderr)
 	}, true)
 }
@@ -743,12 +798,6 @@ func handleContainerBranch(w http.ResponseWriter, r *http.Request, configDir, na
 		return
 	}
 
-	ctx, _, err := ensureDiscourseContainer(configDir, name)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	checkoutCmds := buildBranchCheckoutCommands(branch)
 	if req.New {
 		exists, err := remoteBranchExists("https://github.com/discourse/discourse.git", branch)
@@ -762,38 +811,39 @@ func handleContainerBranch(w http.ResponseWriter, r *http.Request, configDir, na
 	}
 	script := buildDiscourseResetScript(checkoutCmds, discourseResetScriptOpts{SkipDBReset: req.NoReset})
 	argv := []string{"bash", "-lc", script}
-	workdir := ctx.workdir
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
+		ctx, _, err := ensureDiscourseContainer(configDir, name, stdout, stderr)
+		if err != nil {
+			return err
+		}
+		return docker.ExecStreamContext(r.Context(), ctx.name, ctx.workdir, nil, argv, stdout, stderr)
 	}, true)
 }
 
 func handleContainerCatchup(w http.ResponseWriter, r *http.Request, configDir, name string) {
-	ctx, _, err := ensureDiscourseContainer(configDir, name)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	workdir := ctx.workdir
-
-	findScript := "find plugins -maxdepth 2 -name .git -type d 2>/dev/null | sed 's|/.git$||' | sort"
-	pluginOutput, err := docker.ExecOutput(ctx.name, workdir, nil, []string{"bash", "-c", findScript})
-	if err != nil {
-		pluginOutput = ""
-	}
-	var plugins []string
-	for _, line := range strings.Split(strings.TrimSpace(pluginOutput), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			plugins = append(plugins, line)
-		}
-	}
-
-	script := buildCatchupScript(workdir, plugins)
-	argv := []string{"bash", "-lc", script}
-
 	streamExec(w, func(stdout, stderr io.Writer) error {
+		ctx, _, err := ensureDiscourseContainer(configDir, name, stdout, stderr)
+		if err != nil {
+			return err
+		}
+		workdir := ctx.workdir
+
+		findScript := "find plugins -maxdepth 2 -name .git -type d 2>/dev/null | sed 's|/.git$||' | sort"
+		pluginOutput, err := docker.ExecOutput(ctx.name, workdir, nil, []string{"bash", "-c", findScript})
+		if err != nil {
+			pluginOutput = ""
+		}
+		var plugins []string
+		for _, line := range strings.Split(strings.TrimSpace(pluginOutput), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				plugins = append(plugins, line)
+			}
+		}
+
+		script := buildCatchupScript(workdir, plugins)
+		argv := []string{"bash", "-lc", script}
 		return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
 	}, true)
 }
@@ -807,13 +857,6 @@ func handleContainerReset(w http.ResponseWriter, r *http.Request, configDir, nam
 		return
 	}
 
-	ctx, _, err := ensureDiscourseContainer(configDir, name)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	workdir := ctx.workdir
-
 	var script string
 	if req.DiscourseReset {
 		script = buildDiscourseResetScript(buildCurrentBranchResetCommands(), discourseResetScriptOpts{})
@@ -823,7 +866,11 @@ func handleContainerReset(w http.ResponseWriter, r *http.Request, configDir, nam
 	argv := []string{"bash", "-lc", script}
 
 	streamExec(w, func(stdout, stderr io.Writer) error {
-		return docker.ExecStreamContext(r.Context(), ctx.name, workdir, nil, argv, stdout, stderr)
+		ctx, _, err := ensureDiscourseContainer(configDir, name, stdout, stderr)
+		if err != nil {
+			return err
+		}
+		return docker.ExecStreamContext(r.Context(), ctx.name, ctx.workdir, nil, argv, stdout, stderr)
 	}, true)
 }
 
@@ -852,12 +899,6 @@ func handleContainerUpdateAgents(w http.ResponseWriter, r *http.Request, configD
 		writeJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ctx, err := ensureContainerExecContext(configDir, name)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	imgCfg, err := resolveImageConfig(cfg, name)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, err.Error())
@@ -875,6 +916,15 @@ func handleContainerUpdateAgents(w http.ResponseWriter, r *http.Request, configD
 	}
 
 	streamSequence(w, func(sse *sseWriter) error {
+		var ctx containerExecContext
+		if err := runExecWithSSE(sse, func(stdout, stderr io.Writer) error {
+			var ensureErr error
+			ctx, ensureErr = ensureContainerExecContext(configDir, name, stdout, stderr)
+			return ensureErr
+		}); err != nil {
+			return err
+		}
+
 		for _, step := range steps {
 			sse.writeEvent("output", map[string]string{"stream": "stdout", "text": fmt.Sprintf("• %s...\n", step.label)})
 			shellCmd := "set -euo pipefail; "
@@ -1279,7 +1329,7 @@ func listContainers(cfg config.Config, includeSessions bool) ([]map[string]inter
 	return outContainers, selected, nil
 }
 
-func ensureContainerExecContext(configDir, name string) (containerExecContext, error) {
+func ensureContainerExecContext(configDir, name string, hookWriters ...io.Writer) (containerExecContext, error) {
 	cfg, err := config.LoadOrCreate(configDir)
 	if err != nil {
 		return containerExecContext{}, err
@@ -1291,7 +1341,9 @@ func ensureContainerExecContext(configDir, name string) (containerExecContext, e
 		return containerExecContext{}, fmt.Errorf("container '%s' does not exist", name)
 	}
 	if !docker.Running(name) {
-		if err := docker.Start(name); err != nil {
+		hookOut, hookErr := hookWritersForServeEnsure(hookWriters)
+		hookCmd := newHostHookCommand("serve", strings.NewReader(""), hookOut, hookErr)
+		if err := startContainerWithPostStartHook(hookCmd, cfg, configDir, name, "serve"); err != nil {
 			return containerExecContext{}, err
 		}
 	}
@@ -1315,12 +1367,23 @@ func ensureContainerExecContext(configDir, name string) (containerExecContext, e
 	return containerExecContext{name: name, workdir: workdir, envs: envs}, nil
 }
 
-func ensureDiscourseContainer(configDir, name string) (containerExecContext, config.ImageConfig, error) {
+func hookWritersForServeEnsure(writers []io.Writer) (io.Writer, io.Writer) {
+	out, errOut := io.Discard, io.Discard
+	if len(writers) > 0 && writers[0] != nil {
+		out = writers[0]
+	}
+	if len(writers) > 1 && writers[1] != nil {
+		errOut = writers[1]
+	}
+	return out, errOut
+}
+
+func ensureDiscourseContainer(configDir, name string, hookWriters ...io.Writer) (containerExecContext, config.ImageConfig, error) {
 	cfg, err := config.LoadOrCreate(configDir)
 	if err != nil {
 		return containerExecContext{}, config.ImageConfig{}, err
 	}
-	ctx, err := ensureContainerExecContext(configDir, name)
+	ctx, err := ensureContainerExecContext(configDir, name, hookWriters...)
 	if err != nil {
 		return containerExecContext{}, config.ImageConfig{}, err
 	}

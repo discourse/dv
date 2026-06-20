@@ -45,7 +45,7 @@ var configMcpCmd = &cobra.Command{
 		}
 		if !docker.Running(containerName) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
-			if err := docker.Start(containerName); err != nil {
+			if err := startContainerWithPostStartHook(cmd, cfg, configDir, containerName, "config mcp"); err != nil {
 				return err
 			}
 		}

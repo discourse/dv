@@ -109,7 +109,8 @@ func ApplySiteSettings(cmd *cobra.Command, cfg config.Config, containerName stri
 	}
 	if !docker.Running(containerName) {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", containerName)
-		if err := docker.Start(containerName); err != nil {
+		configDir, _ := xdg.ConfigDir()
+		if err := startContainerWithPostStartHook(cmd, cfg, configDir, containerName, "config site_settings"); err != nil {
 			return err
 		}
 	}

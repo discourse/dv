@@ -155,17 +155,18 @@ var newCmd = &cobra.Command{
 		keepOnFailure, _ := cmd.Flags().GetBool("keep-on-failure")
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		containerCreated := false
+		provisioningComplete := false
 		previousSessionAgent := session.GetCurrentAgent()
 		sessionSelectionSet := false
 		defer func() {
-			if err != nil && sessionSelectionSet {
+			if shouldRollbackNewSelection(err, provisioningComplete) && sessionSelectionSet {
 				if previousSessionAgent != "" {
 					_ = session.SetCurrentAgent(previousSessionAgent)
 				} else {
 					_ = session.ClearCurrentAgent()
 				}
 			}
-			if err != nil && containerCreated && !keepOnFailure {
+			if shouldCleanupNewContainer(err, containerCreated, provisioningComplete, keepOnFailure) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "\nProvisioning failed: %v\n", err)
 				fmt.Fprintf(cmd.ErrOrStderr(), "Cleaning up container '%s' (use --keep-on-failure to bypass)...\n", name)
 				_ = docker.Stop(name)
@@ -271,10 +272,11 @@ var newCmd = &cobra.Command{
 				})
 			}
 		}
-		if err = ensureContainerRunningWithWorkdir(cmd, cfg, name, workdir, imageTag, imgName, false, sshAuthSock, templateEnvs, templateMounts); err != nil {
+		lifecycle, err := ensureContainerRunningWithWorkdirResult(cmd, cfg, name, workdir, imageTag, imgName, false, sshAuthSock, templateEnvs, templateMounts)
+		if err != nil {
 			return err
 		}
-		containerCreated = true
+		containerCreated = lifecycle.Created
 
 		if cfg.ContainerImages == nil {
 			cfg.ContainerImages = map[string]string{}
@@ -302,9 +304,39 @@ var newCmd = &cobra.Command{
 			}
 		}
 
+		provisioningComplete = true
+		hookCtx := hostHookContext{
+			CommandName:   "new",
+			ContainerName: name,
+			ImageName:     imgName,
+			ImageTag:      imageTag,
+			Workdir:       workdir,
+			HostPort:      lifecycle.HostPort,
+			ContainerPort: lifecycle.ContainerPort,
+			ConfigDir:     configDir,
+		}
+		if lifecycle.Created {
+			if err = runHostHooksForContainer(cmd, cfg, hostHookPostCreate, hookCtx); err != nil {
+				return err
+			}
+		}
+		if lifecycle.Started {
+			if err = runHostHooksForContainer(cmd, cfg, hostHookPostStart, hookCtx); err != nil {
+				return err
+			}
+		}
+
 		fmt.Fprintf(cmd.OutOrStdout(), "Agent '%s' is ready and selected.\n", name)
 		return nil
 	},
+}
+
+func shouldRollbackNewSelection(err error, provisioningComplete bool) bool {
+	return err != nil && !provisioningComplete
+}
+
+func shouldCleanupNewContainer(err error, containerCreated, provisioningComplete, keepOnFailure bool) bool {
+	return err != nil && containerCreated && !provisioningComplete && !keepOnFailure
 }
 
 func confirmInvalidRailsHostname(cmd *cobra.Command, name string) (bool, error) {

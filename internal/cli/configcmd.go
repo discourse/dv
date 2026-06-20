@@ -24,7 +24,7 @@ var configGetCmd = &cobra.Command{
 	ValidArgs: []string{
 		"imageTag", "defaultContainerName", "workdir", "customWorkdir",
 		"hostStartingPort", "containerPort", "selectedAgent", "discourseRepo",
-		"extractBranchPrefix", "defaultTemplate",
+		"extractBranchPrefix", "defaultTemplate", "hooks",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -52,7 +52,7 @@ var configSetCmd = &cobra.Command{
 	ValidArgs: []string{
 		"imageTag", "defaultContainerName", "workdir", "customWorkdir",
 		"hostStartingPort", "containerPort", "selectedAgent", "discourseRepo",
-		"extractBranchPrefix", "defaultTemplate",
+		"extractBranchPrefix", "defaultTemplate", "hooks",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -120,7 +120,7 @@ var configResetCmd = &cobra.Command{
 	Short: "Reset config (or a specific key) to default values",
 	Args:  cobra.MaximumNArgs(1),
 	ValidArgs: []string{
-		"copyRules",
+		"copyRules", "hooks",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -147,6 +147,9 @@ var configResetCmd = &cobra.Command{
 		case "copyRules":
 			cfg.CopyRules = config.DefaultCopyRules()
 			fmt.Fprintln(cmd.OutOrStdout(), "Config key 'copyRules' reset to default values")
+		case "hooks":
+			cfg.Hooks = config.HooksConfig{}
+			fmt.Fprintln(cmd.OutOrStdout(), "Config key 'hooks' reset to default values")
 		default:
 			// Fallback to checking if we can just set it to default from a new Default config
 			return fmt.Errorf("resetting key %q is not supported yet (try 'dv config reset' for everything)", key)
@@ -186,6 +189,12 @@ func getConfigField(cfg config.Config, key string) (string, error) {
 		return cfg.ExtractBranchPrefix, nil
 	case "defaultTemplate":
 		return cfg.DefaultTemplate, nil
+	case "hooks":
+		b, err := json.MarshalIndent(cfg.Hooks, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
 	default:
 		return "", fmt.Errorf("unknown key: %s", key)
 	}
@@ -223,6 +232,12 @@ func setConfigField(cfg *config.Config, key, val string) error {
 		cfg.ExtractBranchPrefix = val
 	case "defaultTemplate":
 		cfg.DefaultTemplate = val
+	case "hooks":
+		var hooks config.HooksConfig
+		if err := json.Unmarshal([]byte(val), &hooks); err != nil {
+			return fmt.Errorf("invalid hooks JSON: %w", err)
+		}
+		cfg.Hooks = hooks
 	default:
 		return fmt.Errorf("unknown key: %s", key)
 	}

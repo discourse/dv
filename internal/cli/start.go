@@ -34,6 +34,10 @@ var startCmd = &cobra.Command{
 		}
 
 		reset, _ := cmd.Flags().GetBool("reset")
+		createdContainer := false
+		startedContainer := false
+		hookHostPort := 0
+		hookWorkdir := ""
 		// Priority: positional arg > --name flag > config
 		name, _ := cmd.Flags().GetString("name")
 		if len(args) > 0 {
@@ -114,6 +118,10 @@ var startCmd = &cobra.Command{
 			if err := docker.RunDetached(name, workdir, imageTag, chosenPort, containerPort, labels, envs, extraHosts, "", nil); err != nil {
 				return err
 			}
+			createdContainer = true
+			startedContainer = true
+			hookHostPort = chosenPort
+			hookWorkdir = workdir
 
 			// give it a moment to boot services
 			time.Sleep(500 * time.Millisecond)
@@ -183,6 +191,10 @@ var startCmd = &cobra.Command{
 						_ = docker.RemoveImage(tempImage)
 						return fmt.Errorf("failed to recreate container: %w", err)
 					}
+					createdContainer = true
+					startedContainer = true
+					hookHostPort = newPort
+					hookWorkdir = existingWorkdir
 
 					// Clean up snapshot image (force+quiet since new container references it)
 					_ = docker.RemoveImageQuiet(tempImage)
@@ -199,6 +211,8 @@ var startCmd = &cobra.Command{
 					if err := docker.Start(name); err != nil {
 						return err
 					}
+					startedContainer = true
+					hookHostPort = existingPort
 				}
 			} else {
 				// Couldn't determine port, start normally
@@ -206,6 +220,7 @@ var startCmd = &cobra.Command{
 				if err := docker.Start(name); err != nil {
 					return err
 				}
+				startedContainer = true
 			}
 			registerContainerFromLabels(cmd, cfg, name)
 		} else {
@@ -223,6 +238,27 @@ var startCmd = &cobra.Command{
 		}
 		if overridesDirty {
 			_ = config.Save(configDir, cfg)
+		}
+
+		hookCtx := hostHookContext{
+			CommandName:   "start",
+			ContainerName: name,
+			ImageName:     imgName,
+			ImageTag:      imageTag,
+			Workdir:       hookWorkdir,
+			HostPort:      hookHostPort,
+			ContainerPort: containerPort,
+			ConfigDir:     configDir,
+		}
+		if createdContainer {
+			if err := runHostHooksForContainer(cmd, cfg, hostHookPostCreate, hookCtx); err != nil {
+				return err
+			}
+		}
+		if startedContainer {
+			if err := runHostHooksForContainer(cmd, cfg, hostHookPostStart, hookCtx); err != nil {
+				return err
+			}
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "Ready.")

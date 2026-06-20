@@ -36,7 +36,7 @@ var restartDiscourseCmd = &cobra.Command{
 		// Ensure container is running
 		if !docker.Running(name) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", name)
-			if err := docker.Start(name); err != nil {
+			if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "restart discourse"); err != nil {
 				return err
 			}
 		}

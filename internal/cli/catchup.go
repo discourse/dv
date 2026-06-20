@@ -38,7 +38,7 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 	}
 	if !docker.Running(name) {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", name)
-		if err := docker.Start(name); err != nil {
+		if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "catchup"); err != nil {
 			return err
 		}
 	}

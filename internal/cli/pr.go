@@ -75,7 +75,7 @@ var prCmd = &cobra.Command{
 		}
 		if !docker.Running(name) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", name)
-			if err := docker.Start(name); err != nil {
+			if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "pr"); err != nil {
 				return err
 			}
 		}

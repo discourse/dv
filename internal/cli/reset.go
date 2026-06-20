@@ -54,7 +54,7 @@ func resetDbRunE(cmd *cobra.Command, args []string) error {
 	}
 	if !docker.Running(name) {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", name)
-		if err := docker.Start(name); err != nil {
+		if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "reset"); err != nil {
 			return err
 		}
 	}
@@ -108,7 +108,7 @@ func resetGitRunE(cmd *cobra.Command, args []string) error {
 	}
 	if !docker.Running(name) {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting container '%s'...\n", name)
-		if err := docker.Start(name); err != nil {
+		if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "reset git"); err != nil {
 			return err
 		}
 	}
