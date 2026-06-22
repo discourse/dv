@@ -20,6 +20,8 @@ import (
 const (
 	hostHookPostCreate = "postCreate"
 	hostHookPostStart  = "postStart"
+	hostHookPreRemove  = "preRemove"
+	hostHookPostRemove = "postRemove"
 )
 
 type hostHookContext struct {
@@ -50,12 +52,21 @@ func startContainerWithPostStartHook(cmd *cobra.Command, cfg config.Config, conf
 }
 
 func runHostHooksForContainer(cmd *cobra.Command, cfg config.Config, hookName string, ctx hostHookContext) error {
-	ctx.Hook = hookName
+	ctx = enrichHostHookContextForContainer(cfg, hookName, ctx)
 	if strings.TrimSpace(ctx.ContainerName) == "" {
 		return nil
 	}
 	if isTruthyEnv("DV_NO_HOOKS") || len(configuredHooksForName(cfg.Hooks, hookName)) == 0 {
 		return nil
+	}
+
+	return runConfiguredHostHooks(cmd, cfg, hookName, ctx)
+}
+
+func enrichHostHookContextForContainer(cfg config.Config, hookName string, ctx hostHookContext) hostHookContext {
+	ctx.Hook = hookName
+	if strings.TrimSpace(ctx.ContainerName) == "" {
+		return ctx
 	}
 
 	labels, _ := labelsWithOverrides(ctx.ContainerName, cfg)
@@ -93,7 +104,7 @@ func runHostHooksForContainer(cmd *cobra.Command, cfg config.Config, hookName st
 		}
 	}
 
-	return runConfiguredHostHooks(cmd, cfg, hookName, ctx)
+	return ctx
 }
 
 func runConfiguredHostHooks(cmd *cobra.Command, cfg config.Config, hookName string, ctx hostHookContext) error {
@@ -106,9 +117,7 @@ func runConfiguredHostHooks(cmd *cobra.Command, cfg config.Config, hookName stri
 		return nil
 	}
 
-	if ctx.Hook == "" {
-		ctx.Hook = hookName
-	}
+	ctx.Hook = hookName
 	if ctx.CommandName == "" && cmd != nil {
 		ctx.CommandName = cmd.Name()
 	}
@@ -152,6 +161,10 @@ func configuredHooksForName(hooks config.HooksConfig, hookName string) []config.
 		return hooks.PostCreate
 	case hostHookPostStart:
 		return hooks.PostStart
+	case hostHookPreRemove:
+		return hooks.PreRemove
+	case hostHookPostRemove:
+		return hooks.PostRemove
 	default:
 		return nil
 	}

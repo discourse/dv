@@ -556,6 +556,12 @@ Configure host-side lifecycle hooks in `~/.config/dv/config.json` when you need 
     ],
     "postStart": [
       { "command": "~/.config/dv/hooks/post-start", "ignoreErrors": true }
+    ],
+    "preRemove": [
+      { "command": "~/.config/dv/hooks/pre-remove" }
+    ],
+    "postRemove": [
+      { "command": "~/.config/dv/hooks/post-remove" }
     ]
   }
 }
@@ -563,6 +569,8 @@ Configure host-side lifecycle hooks in `~/.config/dv/config.json` when you need 
 
 - `postCreate` runs after `dv` creates or recreates a container (for example `dv start`, `dv start --reset`, or `dv new`). For `dv new`, hooks run after the full provisioning/template flow completes, not immediately after the Docker container is created.
 - `postStart` runs after `dv` starts a stopped container, including the initial start after creation. It does not run when the container was already running.
+- `preRemove` runs after removal is confirmed but before Docker removes an existing container. A failure stops removal unless the hook has `"ignoreErrors": true`.
+- `postRemove` runs after Docker successfully removes an existing container and after `dv` finishes config/proxy cleanup. It does not run when the container did not exist or Docker removal failed.
 - Hooks run in order; set `"enabled": false` to disable an entry without deleting it. By default hook failures stop the command; set `"ignoreErrors": true` to warn and continue.
 - Hooks inherit the `dv` process environment, so keep hook scripts trusted if your shell exports API keys or tokens. Hooks also run when containers are created/started via `dv serve`; treat the serve bearer token as permission to trigger any configured host hooks, especially when using `dv serve --public`.
 - `postStart` runs before `copyRules` are applied by `dv enter`, `dv run`, or `dv run-agent`.

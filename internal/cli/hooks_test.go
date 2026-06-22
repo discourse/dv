@@ -223,3 +223,73 @@ func TestRunConfiguredHostHooksUsesExecutionIndex(t *testing.T) {
 		t.Fatalf("hook indexes = %q, want 0 and 1", string(got))
 	}
 }
+
+func TestRunConfiguredHostHooksSupportsPreRemove(t *testing.T) {
+	t.Setenv("DV_NO_HOOKS", "")
+
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "pre-remove.out")
+	cfg := config.Config{
+		Hooks: config.HooksConfig{
+			PreRemove: []config.HostHook{{Command: fmt.Sprintf("printf '%%s' \"$DV_HOOK|$DV_CONTAINER_NAME|$DV_IMAGE_NAME|$DV_NO_HOOKS\" > %s", shellQuote(outPath))}},
+		},
+	}
+
+	cmd, stdout, stderr := hookTestCommand("remove")
+	err := runConfiguredHostHooks(cmd, cfg, hostHookPreRemove, hostHookContext{
+		ContainerName: "amazing-feature",
+		ImageName:     "discourse",
+	})
+	if err != nil {
+		t.Fatalf("runConfiguredHostHooks returned error: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Running preRemove hook") {
+		t.Fatalf("stdout = %q, want preRemove progress", stdout.String())
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read preRemove output: %v", err)
+	}
+	want := "preRemove|amazing-feature|discourse|1"
+	if string(got) != want {
+		t.Fatalf("preRemove output = %q, want %q", string(got), want)
+	}
+}
+
+func TestRunConfiguredHostHooksSupportsPostRemove(t *testing.T) {
+	t.Setenv("DV_NO_HOOKS", "")
+
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "post-remove.out")
+	cfg := config.Config{
+		Hooks: config.HooksConfig{
+			PostRemove: []config.HostHook{{Command: fmt.Sprintf("printf '%%s' \"$DV_HOOK|$DV_CONTAINER_NAME|$DV_IMAGE_NAME|$DV_NO_HOOKS\" > %s", shellQuote(outPath))}},
+		},
+	}
+
+	cmd, stdout, stderr := hookTestCommand("remove")
+	err := runConfiguredHostHooks(cmd, cfg, hostHookPostRemove, hostHookContext{
+		ContainerName: "amazing-feature",
+		ImageName:     "discourse",
+	})
+	if err != nil {
+		t.Fatalf("runConfiguredHostHooks returned error: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Running postRemove hook") {
+		t.Fatalf("stdout = %q, want postRemove progress", stdout.String())
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read postRemove output: %v", err)
+	}
+	want := "postRemove|amazing-feature|discourse|1"
+	if string(got) != want {
+		t.Fatalf("postRemove output = %q, want %q", string(got), want)
+	}
+}

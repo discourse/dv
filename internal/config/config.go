@@ -65,6 +65,10 @@ type HooksConfig struct {
 	PostCreate []HostHook `json:"postCreate,omitempty"`
 	// PostStart runs after dv starts a container, including immediately after creation.
 	PostStart []HostHook `json:"postStart,omitempty"`
+	// PreRemove runs after removal is confirmed but before dv removes the container.
+	PreRemove []HostHook `json:"preRemove,omitempty"`
+	// PostRemove runs after dv removes the container and finishes local cleanup.
+	PostRemove []HostHook `json:"postRemove,omitempty"`
 }
 
 // HostHook describes a shell command run on the host for a lifecycle hook.

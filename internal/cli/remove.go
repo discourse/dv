@@ -13,6 +13,15 @@ import (
 	"dv/internal/xdg"
 )
 
+var (
+	removeDockerExists      = docker.Exists
+	removeDockerRunning     = docker.Running
+	removeDockerRemove      = docker.Remove
+	removeDockerRemoveForce = docker.RemoveForce
+	removeDockerImageExists = docker.ImageExists
+	removeDockerRemoveImage = docker.RemoveImage
+)
+
 var removeCmd = &cobra.Command{
 	Use:     "remove [NAME]",
 	Aliases: []string{"rm"},
@@ -54,7 +63,16 @@ var removeCmd = &cobra.Command{
 			}
 		}
 
-		if docker.Exists(name) {
+		removalHookCtx := hostHookContext{
+			CommandName:   cmd.Name(),
+			ContainerName: name,
+			ImageName:     imgForContainer,
+			ConfigDir:     configDir,
+		}
+
+		containerRemoved := false
+		var removeErr error
+		if removeDockerExists(name) {
 			force, _ := cmd.Flags().GetBool("force")
 			if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
 				return err
@@ -62,20 +80,26 @@ var removeCmd = &cobra.Command{
 				return nil
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Stopping and removing container '%s'...\n", name)
-			if docker.Running(name) {
-				_ = docker.RemoveForce(name)
-			} else {
-				_ = docker.Remove(name)
+			removalHookCtx = enrichHostHookContextForContainer(cfg, hostHookPreRemove, removalHookCtx)
+			if err := runConfiguredHostHooks(cmd, cfg, hostHookPreRemove, removalHookCtx); err != nil {
+				return err
 			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Stopping and removing container '%s'...\n", name)
+			if removeDockerRunning(name) {
+				removeErr = removeDockerRemoveForce(name)
+			} else {
+				removeErr = removeDockerRemove(name)
+			}
+			containerRemoved = removeErr == nil
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist\n", name)
 		}
 
 		if removeImage {
-			if docker.ImageExists(cfg.ImageTag) {
+			if removeDockerImageExists(cfg.ImageTag) {
 				fmt.Fprintf(cmd.OutOrStdout(), "Removing image '%s'...\n", cfg.ImageTag)
-				_ = docker.RemoveImage(cfg.ImageTag)
+				_ = removeDockerRemoveImage(cfg.ImageTag)
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "Image '%s' does not exist\n", cfg.ImageTag)
 			}
@@ -149,6 +173,16 @@ var removeCmd = &cobra.Command{
 			if err := localproxy.RemoveRoute(cfg.LocalProxy, proxyHost); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not remove %s from local proxy: %v\n", proxyHost, err)
 			}
+		}
+
+		if containerRemoved {
+			if err := runConfiguredHostHooks(cmd, cfg, hostHookPostRemove, removalHookCtx); err != nil {
+				return err
+			}
+		}
+
+		if removeErr != nil {
+			return fmt.Errorf("remove container %q: %w", name, removeErr)
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "Removal complete")
