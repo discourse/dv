@@ -404,6 +404,7 @@ func checkoutBranch(cmd *cobra.Command, cfg config.Config, name, workdir, branch
 		script := fmt.Sprintf(`
 set -e
 echo "Checking out %s..."
+git reset --hard > /tmp/dv-git-reset.log 2>&1 || true
 git checkout %s > /tmp/dv-git-checkout.log 2>&1
 echo "Pulling latest..."
 git pull > /tmp/dv-git-pull.log 2>&1
