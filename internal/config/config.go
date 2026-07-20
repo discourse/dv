@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+const currentCopyRulesDefaultsVersion = 1
+
 type Config struct {
 	ImageTag         string            `json:"imageTag"`
 	DefaultContainer string            `json:"defaultContainerName"`
@@ -50,6 +52,10 @@ type Config struct {
 	// CopyRules is the preferred representation of copy mappings with optional
 	// agent scoping.
 	CopyRules []CopyRule `json:"copyRules,omitempty"`
+	// CopyRulesDefaultsVersion tracks one-time migrations that add newly introduced
+	// default copy rules to existing configs without re-adding rules after a user
+	// intentionally removes them.
+	CopyRulesDefaultsVersion int `json:"copyRulesDefaultsVersion,omitempty"`
 
 	// Hooks defines host-side lifecycle commands run by dv.
 	Hooks HooksConfig `json:"hooks,omitempty"`
@@ -172,7 +178,7 @@ func Default() Config {
 			"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
 			"CLAUDE_CODE_USE_BEDROCK", "DEEPSEEK_API_KEY", "GEMINI_API_KEY",
 			"GH_TOKEN", "OPENROUTER_API_KEY", "VENICE_API_KEY",
-			"FACTORY_API_KEY", "MISTRAL_API_KEY",
+			"FACTORY_API_KEY", "MISTRAL_API_KEY", "XAI_API_KEY",
 			"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
 			"ANTHROPIC_DEFAULT_HAIKU_MODEL",
 		},
@@ -190,9 +196,10 @@ func Default() Config {
 				Dockerfile:    ImageSource{Source: "stock", StockName: "discourse"},
 			},
 		},
-		ContainerImages: map[string]string{},
-		CopyRules:       DefaultCopyRules(),
-		Agents:          map[string]AgentConfig{},
+		ContainerImages:          map[string]string{},
+		CopyRules:                DefaultCopyRules(),
+		CopyRulesDefaultsVersion: currentCopyRulesDefaultsVersion,
+		Agents:                   map[string]AgentConfig{},
 	}
 }
 
@@ -246,6 +253,7 @@ func LoadOrCreate(configDir string) (Config, error) {
 		cfg.Agents = map[string]AgentConfig{}
 	}
 	cfg.migrateCopyFiles()
+	cfg.migrateCopyRuleDefaults()
 	if w := strings.TrimSpace(cfg.CustomWorkdir); w != "" {
 		target := cfg.SelectedAgent
 		if target == "" {
@@ -310,7 +318,7 @@ func migrateLegacyEmberCLIPort(cfg *Config) {
 }
 
 func DefaultCopyRules() []CopyRule {
-	return []CopyRule{
+	rules := []CopyRule{
 		{
 			Host:      "~/.codex/auth.json",
 			Container: "/home/discourse/.codex/auth.json",
@@ -355,6 +363,7 @@ func DefaultCopyRules() []CopyRule {
 			SkipIfPresent: true,
 		},
 	}
+	return append(rules, grokCopyRules()...)
 }
 
 func (cfg *Config) migrateCopyFiles() {
@@ -384,6 +393,36 @@ func (cfg *Config) migrateCopyFiles() {
 		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, DefaultCopyRules())
 	}
 	cfg.CopyFiles = nil
+}
+
+func (cfg *Config) migrateCopyRuleDefaults() {
+	if cfg.CopyRulesDefaultsVersion < 1 {
+		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, grokCopyRules())
+		cfg.CopyRulesDefaultsVersion = 1
+	}
+	if cfg.CopyRulesDefaultsVersion < currentCopyRulesDefaultsVersion {
+		cfg.CopyRulesDefaultsVersion = currentCopyRulesDefaultsVersion
+	}
+}
+
+func grokCopyRules() []CopyRule {
+	return []CopyRule{
+		{
+			Host:      "~/.grok/auth.json",
+			Container: "/home/discourse/.grok/auth.json",
+			Agents:    []string{"grok"},
+		},
+		{
+			Host:      "~/.grok/config.toml",
+			Container: "/home/discourse/.grok/config.toml",
+			Agents:    []string{"grok"},
+		},
+		{
+			Host:      "~/.grok/mcp_credentials.json",
+			Container: "/home/discourse/.grok/mcp_credentials.json",
+			Agents:    []string{"grok"},
+		},
+	}
 }
 
 func appendMissingDefaultCopyRules(rules []CopyRule, defaults []CopyRule) []CopyRule {

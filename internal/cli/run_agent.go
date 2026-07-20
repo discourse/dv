@@ -406,6 +406,12 @@ var agentRules = map[string]agentRule{
 		withPrompt:  func(p string) []string { return []string{"vibe", "--prompt", p} },
 		defaults:    []string{"--auto-approve"},
 	},
+	"grok": {
+		interactive: func() []string { return []string{"grok"} },
+		withPrompt:  func(p string) []string { return []string{"grok", "-p", p} },
+		defaults:    []string{"--yolo"},
+		env:         []string{"XAI_API_KEY"},
+	},
 	"term-llm": {
 		interactive:   func() []string { return []string{"term-llm"} },
 		withPrompt:    func(p string) []string { return []string{"term-llm", "ask", "@developer", "--yolo", p} },
@@ -521,7 +527,7 @@ func sortedCustomAgentNames(cfg config.Config) []string {
 
 // withUserPaths prefixes a shell command with PATH extensions for common user-level bin dirs.
 func withUserPaths(cmd string) string {
-	prefix := "export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:$PATH\"; "
+	prefix := "export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:$HOME/.grok/bin:$PATH\"; "
 	return prefix + cmd
 }
 

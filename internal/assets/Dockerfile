@@ -15,6 +15,7 @@ RUN sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && pnpm install'
 RUN npm i -g @openai/codex
 RUN npm i -g opencode-ai@latest
 RUN npm i -g @github/copilot
+RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://x.ai/cli/install.sh | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsS https://cursor.com/install | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'

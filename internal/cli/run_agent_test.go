@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"slices"
 	"testing"
 
 	"dv/internal/config"
@@ -34,6 +35,22 @@ func TestBuildAgentArgsCodexPromptAtEnd(t *testing.T) {
 	args := buildAgentArgs("codex", "abc")
 	if got := args[len(args)-1]; got != "abc" {
 		t.Fatalf("last arg = %q, want prompt", got)
+	}
+}
+
+func TestBuildAgentArgsGrokUsesSinglePromptAndYolo(t *testing.T) {
+	args := buildAgentArgs("grok", "hello")
+	want := []string{"grok", "--yolo", "-p", "hello"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestBuildAgentInteractiveGrokUsesYolo(t *testing.T) {
+	args := buildAgentInteractive("grok")
+	want := []string{"grok", "--yolo"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
 

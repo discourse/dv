@@ -642,6 +642,98 @@ func TestSave_DefaultTemplateIncludedWhenSet(t *testing.T) {
 	}
 }
 
+func TestDefaultIncludesGrokEnvAndCopyRules(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	if !containsString(cfg.EnvPassthrough, "XAI_API_KEY") {
+		t.Fatal("expected XAI_API_KEY in default env passthrough")
+	}
+	for _, rule := range grokCopyRules() {
+		if !containsCopyRule(cfg.CopyRules, rule.Host, rule.Container) {
+			t.Fatalf("expected default copy rule %s -> %s", rule.Host, rule.Container)
+		}
+	}
+}
+
+func TestLoadOrCreateAppendsMissingGrokCopyRulesForLegacyConfig(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := Default()
+	cfg.CopyRulesDefaultsVersion = 0
+	cfg.CopyRules = []CopyRule{{
+		Host:      "~/custom/auth.json",
+		Container: "/home/discourse/custom/auth.json",
+	}}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if loaded.CopyRulesDefaultsVersion != currentCopyRulesDefaultsVersion {
+		t.Fatalf("expected copy rules defaults version %d, got %d", currentCopyRulesDefaultsVersion, loaded.CopyRulesDefaultsVersion)
+	}
+	if !containsCopyRule(loaded.CopyRules, "~/custom/auth.json", "/home/discourse/custom/auth.json") {
+		t.Fatal("expected custom copy rule to be preserved")
+	}
+	for _, rule := range grokCopyRules() {
+		if !containsCopyRule(loaded.CopyRules, rule.Host, rule.Container) {
+			t.Fatalf("expected migrated Grok copy rule %s -> %s", rule.Host, rule.Container)
+		}
+	}
+}
+
+func TestLoadOrCreateDoesNotReaddRemovedGrokCopyRulesAfterMigration(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := Default()
+	cfg.CopyRulesDefaultsVersion = currentCopyRulesDefaultsVersion
+	cfg.CopyRules = []CopyRule{{
+		Host:      "~/custom/auth.json",
+		Container: "/home/discourse/custom/auth.json",
+	}}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	for _, rule := range grokCopyRules() {
+		if containsCopyRule(loaded.CopyRules, rule.Host, rule.Container) {
+			t.Fatalf("did not expect Grok copy rule to be re-added after migration: %s -> %s", rule.Host, rule.Container)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCopyRule(rules []CopyRule, host, container string) bool {
+	for _, r := range rules {
+		if r.Host == host && r.Container == container {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPath(t *testing.T) {
 	t.Parallel()
 
@@ -675,6 +767,9 @@ func TestDefault(t *testing.T) {
 	}
 	if len(cfg.CopyRules) == 0 {
 		t.Fatal("expected default CopyRules")
+	}
+	if cfg.CopyRulesDefaultsVersion != currentCopyRulesDefaultsVersion {
+		t.Fatalf("expected CopyRulesDefaultsVersion %d, got %d", currentCopyRulesDefaultsVersion, cfg.CopyRulesDefaultsVersion)
 	}
 	if cfg.DefaultTemplate != "" {
 		t.Fatalf("expected DefaultTemplate to be empty, got %q", cfg.DefaultTemplate)
