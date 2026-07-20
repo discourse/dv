@@ -158,6 +158,9 @@ func handleServeRequest(w http.ResponseWriter, r *http.Request, configDir string
 	case path == "containers":
 		handleContainers(w, r, configDir)
 		return
+	case path == "containers/new":
+		handleContainerNew(w, r, configDir)
+		return
 	case strings.HasPrefix(path, "containers/"):
 		handleContainer(w, r, configDir, strings.Split(path, "/"))
 		return
@@ -173,6 +176,118 @@ func handleServeRequest(w http.ResponseWriter, r *http.Request, configDir string
 	default:
 		writeJSON(w, http.StatusNotFound, "not found")
 	}
+}
+
+type newAgentRequest struct {
+	Name          string   `json:"name"`
+	Image         string   `json:"image"`
+	Template      string   `json:"template"`
+	KeepOnFailure bool     `json:"keep_on_failure"`
+	Verbose       bool     `json:"verbose"`
+	PR            string   `json:"pr"`
+	Branch        string   `json:"branch"`
+	Plugins       []string `json:"plugins"`
+	LocalPlugins  []string `json:"local_plugins"`
+	Themes        []string `json:"themes"`
+	WithoutTestDB bool     `json:"without_test_db"`
+}
+
+func (req newAgentRequest) args() []string {
+	args := []string{"new"}
+	if req.Image != "" {
+		args = append(args, "--image", req.Image)
+	}
+	if req.Template != "" {
+		args = append(args, "--template", req.Template)
+	}
+	if req.KeepOnFailure {
+		args = append(args, "--keep-on-failure")
+	}
+	if req.Verbose {
+		args = append(args, "--verbose")
+	}
+	if req.PR != "" {
+		args = append(args, "--pr", req.PR)
+	}
+	if req.Branch != "" {
+		args = append(args, "--branch", req.Branch)
+	}
+	for _, plugin := range req.Plugins {
+		args = append(args, "--plugin", plugin)
+	}
+	for _, plugin := range req.LocalPlugins {
+		args = append(args, "--plugin-local", plugin)
+	}
+	for _, theme := range req.Themes {
+		args = append(args, "--theme", theme)
+	}
+	if req.WithoutTestDB {
+		args = append(args, "--without-test-db")
+	}
+	if req.Name != "" {
+		args = append(args, req.Name)
+	}
+	return args
+}
+
+func handleContainerNew(w http.ResponseWriter, r *http.Request, configDir string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req newAgentRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name != "" && !isRailsHostnameSafe(req.Name) {
+		writeJSON(w, http.StatusBadRequest, "name must contain only numbers, letters, dashes, and dots")
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	args := req.args()
+	streamSequence(w, func(sse *sseWriter) error {
+		err := runExecWithSSE(sse, func(stdout, stderr io.Writer) error {
+			cmd := exec.CommandContext(r.Context(), exe, args...)
+			cmd.Stdout = stdout
+			cmd.Stderr = stderr
+			return cmd.Run()
+		})
+		if err != nil {
+			return err
+		}
+		cfg, err := config.LoadOrCreate(configDir)
+		if err != nil {
+			return err
+		}
+		name := strings.TrimSpace(cfg.SelectedAgent)
+		if name == "" {
+			name = cfg.DefaultContainer
+		}
+		hostname := "localhost"
+		if labels, err := labelsWithOverrides(name, cfg); err == nil {
+			hostname = containerResultHostname(labels)
+		}
+		sse.writeEvent("result", map[string]string{
+			"name":     name,
+			"hostname": hostname,
+		})
+		return nil
+	}, true)
+}
+
+func containerResultHostname(labels map[string]string) string {
+	if proxyHost, _, _, _, ok := localproxy.RouteFromLabels(labels); ok {
+		return proxyHost
+	}
+	return "localhost"
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request, configDir string) {

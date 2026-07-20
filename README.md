@@ -605,6 +605,54 @@ Print the data directory path (`${XDG_DATA_HOME}/dv`).
 dv data
 ```
 
+### dv serve
+
+Run a bearer-token-protected HTTP API for integrations such as desktop apps.
+
+```bash
+dv serve [--host 127.0.0.1] [--port 7373] [--token TOKEN]
+```
+
+The first run generates a token and saves it in the dv config. Send it with every
+request as `Authorization: Bearer TOKEN`. Commands that take time use Server-Sent
+Events: `output` events contain `stream` and `text`, and the final `done` event
+contains `exit_code`.
+
+Create and fully provision a new agent with `POST /containers/new`. The JSON body
+supports all non-interactive `dv new` options:
+
+```json
+{
+  "name": "core-pr-12345",
+  "image": "discourse",
+  "template": "/path/to/template.yml",
+  "keep_on_failure": false,
+  "verbose": false,
+  "pr": "12345",
+  "branch": "",
+  "plugins": ["discourse-solved"],
+  "local_plugins": ["/path/to/local-plugin"],
+  "themes": ["discourse-air"],
+  "without_test_db": false
+}
+```
+
+All fields are optional. If `name` is omitted, `dv new` generates one using its
+normal naming rules. On success, the stream emits `result` with the final agent
+name and its browser-facing hostname, followed by `done` with an exit code of
+zero. The hostname is `localhost` when the local proxy is not active:
+
+```text
+event: result
+data: {"hostname":"core-pr-12345.dv.localhost","name":"core-pr-12345"}
+
+event: done
+data: {"exit_code":0}
+```
+
+Explicit names must be Rails hostname-safe because API requests cannot respond to
+the interactive confirmation used by the CLI for unsafe names.
+
 ### dv config completion
 Generate shell completion scripts (rarely needed). For zsh:
 
