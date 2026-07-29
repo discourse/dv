@@ -201,21 +201,11 @@ func completeAgentNames(cmd *cobra.Command, toComplete string) ([]string, cobra.
 		if len(parts) >= 3 {
 			labelsField = parts[2]
 		}
-		belongs := false
-		if imgNameFromCfg, ok := cfg.ContainerImages[name]; ok && imgNameFromCfg == cfg.SelectedImage {
-			belongs = true
+		labels := parseLabels(labelsField)
+		for key, value := range cfg.LabelOverrides[name] {
+			labels[key] = value
 		}
-		if !belongs {
-			if labelMap := parseLabels(labelsField); labelMap["com.dv.owner"] == "dv" && labelMap["com.dv.image-name"] == cfg.SelectedImage {
-				belongs = true
-			}
-		}
-		if !belongs {
-			if image == imgCfg.Tag {
-				belongs = true
-			}
-		}
-		if !belongs {
+		if !containerBelongsToImage(cfg, name, image, labels, cfg.SelectedImage, imgCfg.Tag) {
 			continue
 		}
 		if prefix == "" || strings.HasPrefix(strings.ToLower(name), prefix) {

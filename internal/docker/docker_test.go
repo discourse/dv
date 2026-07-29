@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -533,5 +534,14 @@ func TestParseContainerMountsEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected no mounts, got %+v", got)
+	}
+}
+
+func TestExecSessionsContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ExecSessionsContext(ctx, "does-not-matter")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ExecSessionsContext error = %v, want context.Canceled", err)
 	}
 }

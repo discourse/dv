@@ -22,42 +22,44 @@ var stopCmd = &cobra.Command{
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configDir, err := xdg.ConfigDir()
-		if err != nil {
-			return err
-		}
-		cfg, err := config.LoadOrCreate(configDir)
-		if err != nil {
-			return err
-		}
-
-		// Priority: positional arg > --name flag > config
 		name, _ := cmd.Flags().GetString("name")
 		if len(args) > 0 {
 			name = args[0]
-		} else if name == "" {
-			name = currentAgentName(cfg)
 		}
-
-		if !docker.Exists(name) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist\n", name)
-			return nil
-		}
-		if !docker.Running(name) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' is already stopped\n", name)
-			return nil
-		}
-
 		force, _ := cmd.Flags().GetBool("force")
-		if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
-			return err
-		} else if !proceed {
-			return nil
-		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "Stopping container '%s'...\n", name)
-		return docker.Stop(name)
+		return runStop(cmd, name, force)
 	},
+}
+
+func runStop(cmd *cobra.Command, name string, force bool) error {
+	configDir, err := xdg.ConfigDir()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		name = currentAgentName(cfg)
+	}
+
+	if !docker.Exists(name) {
+		fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist\n", name)
+		return nil
+	}
+	if !docker.Running(name) {
+		fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' is already stopped\n", name)
+		return nil
+	}
+	if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
+		return err
+	} else if !proceed {
+		return nil
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Stopping container '%s'...\n", name)
+	return docker.StopContext(cmd.Context(), name, cmd.OutOrStdout(), cmd.ErrOrStderr())
 }
 
 func init() {

@@ -3,9 +3,12 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestEffectiveWorkdir_ContainerOverrideTakesPrecedence(t *testing.T) {
@@ -773,5 +776,99 @@ func TestDefault(t *testing.T) {
 	}
 	if cfg.DefaultTemplate != "" {
 		t.Fatalf("expected DefaultTemplate to be empty, got %q", cfg.DefaultTemplate)
+	}
+}
+
+func TestUpdateSerializesConcurrentMutations(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	const updates = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, updates)
+	for i := 0; i < updates; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- Update(dir, func(cfg *Config) error {
+				if cfg.Env == nil {
+					cfg.Env = map[string]string{}
+				}
+				cfg.Env[fmt.Sprintf("KEY_%d", i)] = "present"
+				return nil
+			})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Env) != updates {
+		t.Fatalf("got %d updates, want %d", len(cfg.Env), updates)
+	}
+}
+
+func TestSaveKeepsConfigPrivate(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, Default()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config permissions = %04o, want 0600", got)
+	}
+
+	if err := os.Chmod(Path(dir), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(dir, Default()); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Stat(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("rewritten config permissions = %04o, want 0600", got)
+	}
+}
+
+func TestUpdateCreatesMissingConfigWithoutReentrantLock(t *testing.T) {
+	dir := t.TempDir()
+	done := make(chan error, 1)
+	go func() {
+		done <- Update(dir, func(cfg *Config) error {
+			cfg.SelectedAgent = "created-under-lock"
+			return nil
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Update deadlocked while creating a missing config")
+	}
+	cfg, err := LoadOrCreate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SelectedAgent != "created-under-lock" {
+		t.Fatalf("selected agent = %q", cfg.SelectedAgent)
 	}
 }

@@ -22,23 +22,25 @@ var enterCmd = &cobra.Command{
 		if len(args) > 0 {
 			containerName = args[0]
 		}
-
-		ctx, ok, err := prepareContainerExecContext(cmd, containerName)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-
-		execArgs := []string{"bash", "-l"}
-
 		asRoot, _ := cmd.Flags().GetBool("root")
-		if asRoot {
-			return docker.ExecInteractiveAsRoot(ctx.name, ctx.workdir, ctx.envs, execArgs)
-		}
-		return docker.ExecInteractive(ctx.name, ctx.workdir, ctx.envs, execArgs)
+		return runEnter(cmd, containerName, asRoot)
 	},
+}
+
+func runEnter(cmd *cobra.Command, containerName string, asRoot bool) error {
+	ctx, ok, err := prepareContainerExecContext(cmd, containerName)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
+	execArgs := []string{"bash", "-l"}
+	if asRoot {
+		return docker.ExecInteractiveAsRoot(ctx.name, ctx.workdir, ctx.envs, execArgs)
+	}
+	return docker.ExecInteractive(ctx.name, ctx.workdir, ctx.envs, execArgs)
 }
 
 func init() {

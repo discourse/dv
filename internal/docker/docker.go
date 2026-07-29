@@ -67,6 +67,9 @@ type BuildOptions struct {
 	ExtraArgs    []string // additional docker build args supplied by callers
 	ForceClassic bool     // skip buildx/BuildKit helpers and use legacy docker build
 	Builder      string   // optional buildx builder name
+	Context      context.Context
+	Stdout       io.Writer
+	Stderr       io.Writer
 }
 
 func Exists(name string) bool {
@@ -80,48 +83,93 @@ func Running(name string) bool {
 }
 
 func Stop(name string) error {
-	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker stop %s\n", name)
+	return StopContext(context.Background(), name, os.Stdout, os.Stderr)
+}
+
+// StopContext stops a container with cancellation and caller-owned output.
+func StopContext(ctx context.Context, name string, stdout, stderr io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
 	}
-	cmd := exec.Command("docker", "stop", name)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	if isTruthyEnv("DV_VERBOSE") {
+		fmt.Fprintf(stderr, "Running: docker stop %s\n", name)
+	}
+	cmd := exec.CommandContext(ctx, "docker", "stop", name)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
 }
 
 func Remove(name string) error {
-	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker rm %s\n", name)
-	}
-	cmd := exec.Command("docker", "rm", name)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	return RemoveContext(context.Background(), name, os.Stdout, os.Stderr)
+}
+
+func RemoveContext(ctx context.Context, name string, stdout, stderr io.Writer) error {
+	return runLifecycleCommand(ctx, stdout, stderr, "rm", name)
 }
 
 func RemoveForce(name string) error {
-	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker rm -f %s\n", name)
+	return RemoveForceContext(context.Background(), name, os.Stdout, os.Stderr)
+}
+
+func RemoveForceContext(ctx context.Context, name string, stdout, stderr io.Writer) error {
+	return runLifecycleCommand(ctx, stdout, stderr, "rm", "-f", name)
+}
+
+func runLifecycleCommand(ctx context.Context, stdout, stderr io.Writer, args ...string) error {
+	if stdout == nil {
+		stdout = io.Discard
 	}
-	cmd := exec.Command("docker", "rm", "-f", name)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	if isTruthyEnv("DV_VERBOSE") {
+		fmt.Fprintf(stderr, "Running: docker %s\n", strings.Join(args, " "))
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
 }
 
 func Rename(oldName, newName string) error {
-	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker rename %s %s\n", oldName, newName)
+	return RenameContext(context.Background(), oldName, newName, os.Stdout, os.Stderr)
+}
+
+// RenameContext renames a container with cancellation and caller-owned output.
+func RenameContext(ctx context.Context, oldName, newName string, stdout, stderr io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
 	}
-	cmd := exec.Command("docker", "rename", oldName, newName)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	if isTruthyEnv("DV_VERBOSE") {
+		fmt.Fprintf(stderr, "Running: docker rename %s %s\n", oldName, newName)
+	}
+	cmd := exec.CommandContext(ctx, "docker", "rename", oldName, newName)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
 }
 
 // Pull applies to an image ref (repo:tag or repo@digest)
 func Pull(ref string) error {
-	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker pull %s\n", ref)
+	return PullContext(context.Background(), ref, os.Stdout, os.Stderr)
+}
+
+func PullContext(ctx context.Context, ref string, stdout, stderr io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
 	}
-	cmd := exec.Command("docker", "pull", ref)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	if isTruthyEnv("DV_VERBOSE") {
+		fmt.Fprintf(stderr, "Running: docker pull %s\n", ref)
+	}
+	cmd := exec.CommandContext(ctx, "docker", "pull", ref)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
 }
 
@@ -129,6 +177,16 @@ func Pull(ref string) error {
 // images found in FROM instructions. It ignores images that refer to
 // build stages (AS ...). It prints warnings to stderr on failure but returns nil.
 func PullBaseImages(dockerfilePath string, out io.Writer) {
+	PullBaseImagesContext(context.Background(), dockerfilePath, out, out)
+}
+
+func PullBaseImagesContext(ctx context.Context, dockerfilePath string, stdout, stderr io.Writer) {
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	data, err := os.ReadFile(dockerfilePath)
 	if err != nil {
 		return
@@ -171,9 +229,9 @@ func PullBaseImages(dockerfilePath string, out io.Writer) {
 		if pulled[img] {
 			continue
 		}
-		fmt.Fprintf(out, "Pulling latest base image %s...\n", img)
-		if err := Pull(img); err != nil {
-			fmt.Fprintf(out, "Warning: failed to pull %s (%v); continuing with local version if available.\n", img, err)
+		fmt.Fprintf(stdout, "Pulling latest base image %s...\n", img)
+		if err := PullContext(ctx, img, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "Warning: failed to pull %s (%v); continuing with local version if available.\n", img, err)
 		}
 		pulled[img] = true
 	}
@@ -195,6 +253,15 @@ func Build(tag string, args []string) error {
 // directory. dockerfilePath may be absolute or relative; contextDir must be
 // a directory.
 func BuildFrom(tag, dockerfilePath, contextDir string, opts BuildOptions) error {
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
+	if opts.Stdout == nil {
+		opts.Stdout = os.Stdout
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = os.Stderr
+	}
 	if !filepath.IsAbs(dockerfilePath) {
 		// ensure relative dockerfile path is evaluated relative to contextDir
 		dockerfilePath = filepath.Join(contextDir, dockerfilePath)
@@ -216,23 +283,23 @@ func BuildFrom(tag, dockerfilePath, contextDir string, opts BuildOptions) error 
 	}
 	if !opts.ForceClassic && !buildxOK {
 		if err := buildxError(); err != nil {
-			fmt.Fprintf(os.Stderr, "buildx unavailable (%v); falling back to 'docker build'.\n", err)
+			fmt.Fprintf(opts.Stderr, "buildx unavailable (%v); falling back to 'docker build'.\n", err)
 		} else {
-			fmt.Fprintln(os.Stderr, "buildx unavailable; falling back to 'docker build'.")
+			fmt.Fprintln(opts.Stderr, "buildx unavailable; falling back to 'docker build'.")
 		}
 	}
-	return runClassicBuild(tag, dockerfilePath, contextDir, opts.ExtraArgs)
+	return runClassicBuild(tag, dockerfilePath, contextDir, opts)
 }
 
-func runClassicBuild(tag, dockerfilePath, contextDir string, args []string) error {
+func runClassicBuild(tag, dockerfilePath, contextDir string, opts BuildOptions) error {
 	argv := []string{"build", "-t", tag, "-f", dockerfilePath}
-	argv = append(argv, args...)
+	argv = append(argv, opts.ExtraArgs...)
 	argv = append(argv, contextDir)
 	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker %s\n", strings.Join(argv, " "))
+		fmt.Fprintf(opts.Stderr, "Running: docker %s\n", strings.Join(argv, " "))
 	}
-	cmd := exec.Command("docker", argv...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd := exec.CommandContext(opts.Context, "docker", argv...)
+	cmd.Stdout, cmd.Stderr = opts.Stdout, opts.Stderr
 	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
 	return cmd.Run()
 }
@@ -245,10 +312,10 @@ func runBuildx(tag, dockerfilePath, contextDir string, opts BuildOptions) error 
 	argv = append(argv, opts.ExtraArgs...)
 	argv = append(argv, contextDir)
 	if isTruthyEnv("DV_VERBOSE") {
-		fmt.Fprintf(os.Stderr, "Running: docker %s\n", strings.Join(argv, " "))
+		fmt.Fprintf(opts.Stderr, "Running: docker %s\n", strings.Join(argv, " "))
 	}
-	cmd := exec.Command("docker", argv...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd := exec.CommandContext(opts.Context, "docker", argv...)
+	cmd.Stdout, cmd.Stderr = opts.Stdout, opts.Stderr
 	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
 	return cmd.Run()
 }
@@ -952,7 +1019,11 @@ type ExecSession struct {
 
 // TopProcesses runs `docker top <name> -o pid,ppid,user,args` and parses the output.
 func TopProcesses(name string) ([]TopProcess, error) {
-	cmd := exec.Command("docker", "top", name, "-o", "pid,ppid,user,args")
+	return TopProcessesContext(context.Background(), name)
+}
+
+func TopProcessesContext(ctx context.Context, name string) ([]TopProcess, error) {
+	cmd := exec.CommandContext(ctx, "docker", "top", name, "-o", "pid,ppid,user,args")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker top %s: %w", name, err)
@@ -993,7 +1064,11 @@ func ParseTopOutput(output string) ([]TopProcess, error) {
 // containerInitPID returns the host PID of the container's init process
 // via `docker inspect`.
 func containerInitPID(name string) (int, error) {
-	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Pid}}", name).Output()
+	return containerInitPIDContext(context.Background(), name)
+}
+
+func containerInitPIDContext(ctx context.Context, name string) (int, error) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Pid}}", name).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -1005,12 +1080,16 @@ func containerInitPID(name string) (int, error) {
 // The container's init process is excluded since it also has an external PPID.
 // docker top shows host PIDs, so we use docker inspect to find the init PID.
 func ExecSessions(name string) ([]ExecSession, error) {
-	procs, err := TopProcesses(name)
+	return ExecSessionsContext(context.Background(), name)
+}
+
+func ExecSessionsContext(ctx context.Context, name string) ([]ExecSession, error) {
+	procs, err := TopProcessesContext(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 
-	initPID, err := containerInitPID(name)
+	initPID, err := containerInitPIDContext(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine container init PID for %s: %w", name, err)
 	}

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 const currentCopyRulesDefaultsVersion = 1
@@ -206,39 +208,45 @@ func Default() Config {
 func Path(dir string) string { return filepath.Join(dir, "config.json") }
 
 func LoadOrCreate(configDir string) (Config, error) {
-	p := Path(configDir)
-	data, err := os.ReadFile(p)
+	cfg, exists, err := loadConfig(configDir)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			cfg := Default()
-			if err := os.MkdirAll(configDir, 0o755); err != nil {
-				return Config{}, err
-			}
-			if err := Save(configDir, cfg); err != nil {
-				return Config{}, err
-			}
-			return cfg, nil
-		}
 		return Config{}, err
+	}
+	if !exists {
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			return Config{}, err
+		}
+		if err := Save(configDir, cfg); err != nil {
+			return Config{}, err
+		}
+	}
+	return cfg, nil
+}
+
+// loadConfig never writes or acquires the config lock. Callers that already
+// hold the lock can therefore use it without a reentrant flock deadlock.
+func loadConfig(configDir string) (Config, bool, error) {
+	data, err := os.ReadFile(Path(configDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return Default(), false, nil
+	}
+	if err != nil {
+		return Config{}, false, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("invalid config: %w", err)
+		return Config{}, false, fmt.Errorf("invalid config: %w", err)
 	}
 	migrateLegacyEmberCLIPort(&cfg)
-	// Migration to new image model if needed
-	// Ensure Images map is initialized and contains at least discourse
 	if cfg.Images == nil || len(cfg.Images) == 0 {
 		cfg.Images = map[string]ImageConfig{}
-		// Seed from legacy fields
-		discourse := ImageConfig{
+		cfg.Images["discourse"] = ImageConfig{
 			Kind:          "discourse",
 			Tag:           defaultIfEmpty(cfg.ImageTag, "ai_agent"),
 			Workdir:       defaultIfEmpty(cfg.Workdir, "/var/www/discourse"),
 			ContainerPort: valueOrDefault(cfg.ContainerPort, 3000),
 			Dockerfile:    ImageSource{Source: "stock", StockName: "discourse"},
 		}
-		cfg.Images["discourse"] = discourse
 	}
 	if cfg.SelectedImage == "" {
 		cfg.SelectedImage = "discourse"
@@ -254,7 +262,7 @@ func LoadOrCreate(configDir string) (Config, error) {
 	}
 	cfg.migrateCopyFiles()
 	cfg.migrateCopyRuleDefaults()
-	if w := strings.TrimSpace(cfg.CustomWorkdir); w != "" {
+	if workdir := strings.TrimSpace(cfg.CustomWorkdir); workdir != "" {
 		target := cfg.SelectedAgent
 		if target == "" {
 			target = cfg.DefaultContainer
@@ -262,11 +270,11 @@ func LoadOrCreate(configDir string) (Config, error) {
 		if target == "" {
 			target = "default"
 		}
-		cfg.CustomWorkdirs[target] = w
+		cfg.CustomWorkdirs[target] = workdir
 		cfg.CustomWorkdir = ""
 	}
 	cfg.LocalProxy.ApplyDefaults()
-	return cfg, nil
+	return cfg, true, nil
 }
 
 func Save(configDir string, cfg Config) error {
@@ -274,11 +282,71 @@ func Save(configDir string, cfg Config) error {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return err
 	}
+	return withConfigLock(configDir, func() error {
+		return saveAtomic(Path(configDir), cfg)
+	})
+}
+
+// Update applies a read-modify-write transaction while holding an advisory lock.
+// It is intended for focused mutations that must not overwrite concurrent dv
+// processes, such as changing the selected image or agent.
+func Update(configDir string, mutate func(*Config) error) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return err
+	}
+	return withConfigLock(configDir, func() error {
+		cfg, _, err := loadConfig(configDir)
+		if err != nil {
+			return err
+		}
+		if err := mutate(&cfg); err != nil {
+			return err
+		}
+		cfg.migrateCopyFiles()
+		return saveAtomic(Path(configDir), cfg)
+	})
+}
+
+func withConfigLock(configDir string, run func() error) error {
+	lock, err := os.OpenFile(Path(configDir)+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return err
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	return run()
+}
+
+func saveAtomic(filename string, cfg Config) error {
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(configDir), b, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(filename), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filename)
 }
 
 // Helpers for migration/defaulting

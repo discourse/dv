@@ -266,7 +266,10 @@ func promptYesNo(in io.Reader, out io.Writer, prompt string) (bool, error) {
 		fmt.Fprint(out, prompt)
 	}
 	var response string
-	_, _ = fmt.Fscanln(in, &response)
+	_, err := fmt.Fscanln(in, &response)
+	if errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("confirmation required but stdin is not interactive: %w", err)
+	}
 	response = strings.TrimSpace(strings.ToLower(response))
 	return response == "y" || response == "yes", nil
 }

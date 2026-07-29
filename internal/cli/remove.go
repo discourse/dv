@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,17 @@ var (
 	removeDockerRemoveImage = docker.RemoveImage
 )
 
+type partialOperationError struct {
+	action string
+	err    error
+}
+
+func (e *partialOperationError) Error() string {
+	return fmt.Sprintf("%s completed with warning: %v", e.action, e.err)
+}
+
+func (e *partialOperationError) Unwrap() error { return e.err }
+
 var removeCmd = &cobra.Command{
 	Use:     "remove [NAME]",
 	Aliases: []string{"rm"},
@@ -35,159 +47,157 @@ var removeCmd = &cobra.Command{
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configDir, err := xdg.ConfigDir()
-		if err != nil {
-			return err
-		}
-		cfg, err := config.LoadOrCreate(configDir)
-		if err != nil {
-			return err
-		}
-		dirty := false
-
-		removeImage, _ := cmd.Flags().GetBool("image")
-		name, _ := cmd.Flags().GetString("name")
-		if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
-			name = args[0]
-		}
-		if name == "" {
-			name = currentAgentName(cfg)
-		}
-		imgForContainer := cfg.ContainerImages[name]
-		var proxyHost string
-		if cfg.LocalProxy.Enabled {
-			if labels, err := labelsWithOverrides(name, cfg); err == nil {
-				if host, _, _, _, ok := localproxy.RouteFromLabels(labels); ok {
-					proxyHost = host
-				}
-			}
-		}
-
-		removalHookCtx := hostHookContext{
-			CommandName:   cmd.Name(),
-			ContainerName: name,
-			ImageName:     imgForContainer,
-			ConfigDir:     configDir,
-		}
-
-		containerRemoved := false
-		var removeErr error
-		if removeDockerExists(name) {
-			force, _ := cmd.Flags().GetBool("force")
-			if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
-				return err
-			} else if !proceed {
-				return nil
-			}
-
-			removalHookCtx = enrichHostHookContextForContainer(cfg, hostHookPreRemove, removalHookCtx)
-			if err := runConfiguredHostHooks(cmd, cfg, hostHookPreRemove, removalHookCtx); err != nil {
-				return err
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "Stopping and removing container '%s'...\n", name)
-			if removeDockerRunning(name) {
-				removeErr = removeDockerRemoveForce(name)
-			} else {
-				removeErr = removeDockerRemove(name)
-			}
-			containerRemoved = removeErr == nil
-		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist\n", name)
-		}
-
-		if removeImage {
-			if removeDockerImageExists(cfg.ImageTag) {
-				fmt.Fprintf(cmd.OutOrStdout(), "Removing image '%s'...\n", cfg.ImageTag)
-				_ = removeDockerRemoveImage(cfg.ImageTag)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Image '%s' does not exist\n", cfg.ImageTag)
-			}
-		}
-
-		if cfg.ContainerImages != nil {
-			if _, ok := cfg.ContainerImages[name]; ok {
-				delete(cfg.ContainerImages, name)
-				dirty = true
-			}
-		}
-		if cfg.LabelOverrides != nil {
-			if _, ok := cfg.LabelOverrides[name]; ok {
-				delete(cfg.LabelOverrides, name)
-				dirty = true
-			}
-		}
-		if cfg.CustomWorkdirs != nil {
-			if _, ok := cfg.CustomWorkdirs[name]; ok {
-				delete(cfg.CustomWorkdirs, name)
-				dirty = true
-			}
-		}
-
-		// If we removed the selected agent, choose the first remaining container for the selected image
-		if cfg.SelectedAgent == name {
-			// Determine image to filter by: prefer the container's recorded image, else the currently selected image
-			imgName := imgForContainer
-			_, imgCfg, err := resolveImage(cfg, imgName)
-			if err != nil {
-				// Fallback to selected image silently
-				_, imgCfg, _ = resolveImage(cfg, "")
-			}
-
-			out, _ := runShell("docker ps -a --format '{{.Names}}\t{{.Image}}'")
-			var first string
-			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-				if strings.TrimSpace(line) == "" {
-					continue
-				}
-				parts := strings.SplitN(line, "\t", 2)
-				if len(parts) < 2 {
-					continue
-				}
-				n, image := parts[0], parts[1]
-				if image != imgCfg.Tag {
-					continue
-				}
-				first = n
-				break
-			}
-			cfg.SelectedAgent = first
-			if session.GetCurrentAgent() == name {
-				_ = session.SetCurrentAgent(first)
-			}
-			dirty = true
-			if first != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "Selected agent: %s\n", first)
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "Selected agent: (none)")
-			}
-		}
-
-		if dirty {
-			if err := config.Save(configDir, cfg); err != nil {
-				return err
-			}
-		}
-
-		if proxyHost != "" && localproxy.Running(cfg.LocalProxy) {
-			if err := localproxy.RemoveRoute(cfg.LocalProxy, proxyHost); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not remove %s from local proxy: %v\n", proxyHost, err)
-			}
-		}
-
-		if containerRemoved {
-			if err := runConfiguredHostHooks(cmd, cfg, hostHookPostRemove, removalHookCtx); err != nil {
-				return err
-			}
-		}
-
-		if removeErr != nil {
-			return fmt.Errorf("remove container %q: %w", name, removeErr)
-		}
-
-		fmt.Fprintln(cmd.OutOrStdout(), "Removal complete")
-		return nil
+		force, _ := cmd.Flags().GetBool("force")
+		return runRemove(cmd, args, force, false)
 	},
+}
+
+func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) error {
+	operationCtx := cmd.Context()
+	if operationCtx == nil {
+		operationCtx = context.Background()
+	}
+	configDir, err := xdg.ConfigDir()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		return err
+	}
+	removeImage, _ := cmd.Flags().GetBool("image")
+	name, _ := cmd.Flags().GetString("name")
+	if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
+		name = args[0]
+	}
+	if name == "" {
+		name = currentAgentName(cfg)
+	}
+	imgForContainer := cfg.ContainerImages[name]
+	var proxyHost string
+	if cfg.LocalProxy.Enabled {
+		if labels, err := labelsWithOverrides(name, cfg); err == nil {
+			if host, _, _, _, ok := localproxy.RouteFromLabels(labels); ok {
+				proxyHost = host
+			}
+		}
+	}
+
+	removalHookCtx := hostHookContext{
+		CommandName:   cmd.Name(),
+		ContainerName: name,
+		ImageName:     imgForContainer,
+		ConfigDir:     configDir,
+	}
+
+	containerRemoved := false
+	var removeErr error
+	if removeDockerExists(name) {
+		if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
+			return err
+		} else if !proceed {
+			return nil
+		}
+
+		removalHookCtx = enrichHostHookContextForContainer(cfg, hostHookPreRemove, removalHookCtx)
+		if err := runConfiguredHostHooks(cmd, cfg, hostHookPreRemove, removalHookCtx); err != nil {
+			return err
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Stopping and removing container '%s'...\n", name)
+		if directOutput {
+			// Once confirmed, let removal and config cleanup complete together. Killing
+			// the Docker CLI mid-request can remove the container but skip cleanup.
+			removeCtx := context.WithoutCancel(operationCtx)
+			if removeDockerRunning(name) {
+				removeErr = docker.RemoveForceContext(removeCtx, name, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			} else {
+				removeErr = docker.RemoveContext(removeCtx, name, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
+		} else if removeDockerRunning(name) {
+			removeErr = removeDockerRemoveForce(name)
+		} else {
+			removeErr = removeDockerRemove(name)
+		}
+		containerRemoved = removeErr == nil
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' does not exist\n", name)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove container %q: %w", name, removeErr)
+	}
+
+	if removeImage {
+		if removeDockerImageExists(cfg.ImageTag) {
+			fmt.Fprintf(cmd.OutOrStdout(), "Removing image '%s'...\n", cfg.ImageTag)
+			_ = removeDockerRemoveImage(cfg.ImageTag)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Image '%s' does not exist\n", cfg.ImageTag)
+		}
+	}
+
+	var replacement string
+	imageName := imgForContainer
+	if imageName == "" {
+		imageName = cfg.SelectedImage
+	}
+	if resolvedName, imageCfg, resolveErr := resolveImage(cfg, imageName); resolveErr == nil {
+		records, inventoryErr := collectContainerInventory(context.WithoutCancel(operationCtx), cfg, resolvedName, imageCfg, "", nil)
+		if inventoryErr == nil {
+			for _, record := range records {
+				if record.name == name {
+					continue
+				}
+				if replacement == "" {
+					replacement = record.name
+				}
+				if record.status == "Running" {
+					replacement = record.name
+					break
+				}
+			}
+		}
+	}
+
+	var replacementSelected bool
+	if err := config.Update(configDir, func(latest *config.Config) error {
+		delete(latest.ContainerImages, name)
+		delete(latest.LabelOverrides, name)
+		delete(latest.CustomWorkdirs, name)
+		if latest.SelectedAgent == name {
+			replacementSelected = true
+			latest.SelectedAgent = replacement
+		}
+		cfg = *latest
+		return nil
+	}); err != nil {
+		return err
+	}
+	if replacementSelected {
+		if session.GetCurrentAgent() == name {
+			_ = session.SetCurrentAgent(replacement)
+		}
+		if replacement != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Selected agent: %s\n", replacement)
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "Selected agent: (none)")
+		}
+	}
+
+	if proxyHost != "" && localproxy.Running(cfg.LocalProxy) {
+		if err := localproxy.RemoveRoute(cfg.LocalProxy, proxyHost); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not remove %s from local proxy: %v\n", proxyHost, err)
+		}
+	}
+
+	if containerRemoved {
+		if err := runConfiguredHostHooks(cmd, cfg, hostHookPostRemove, removalHookCtx); err != nil {
+			return &partialOperationError{action: "remove", err: err}
+		}
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "Removal complete")
+	return nil
 }
 
 func init() {

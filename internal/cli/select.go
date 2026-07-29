@@ -26,10 +26,6 @@ var selectCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cfg, err := config.LoadOrCreate(configDir)
-		if err != nil {
-			return err
-		}
 
 		name := args[0]
 
@@ -39,8 +35,10 @@ var selectCmd = &cobra.Command{
 		}
 
 		// Priority 2: global config (fallback for new terminals)
-		cfg.SelectedAgent = name
-		if err := config.Save(configDir, cfg); err != nil {
+		if err := config.Update(configDir, func(cfg *config.Config) error {
+			cfg.SelectedAgent = name
+			return nil
+		}); err != nil {
 			return err
 		}
 

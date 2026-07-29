@@ -10,7 +10,6 @@ import (
 
 	"dv/internal/config"
 	"dv/internal/docker"
-	"dv/internal/localproxy"
 	"dv/internal/xdg"
 )
 
@@ -33,95 +32,22 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
-		proxyActive := cfg.LocalProxy.Enabled && localproxy.Running(cfg.LocalProxy)
-
-		// Include Ports, Labels, and CreatedAt for discovery, clickable URLs, and ordering
-		out, _ := runShell("docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Labels}}\t{{.CreatedAt}}'")
 		selected := currentAgentName(cfg)
-		var agents []agentInfo
-
-		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			parts := strings.SplitN(line, "\t", 6)
-			if len(parts) < 3 {
-				continue
-			}
-			name, image, status := parts[0], parts[1], parts[2]
-			portsField := ""
-			if len(parts) >= 4 {
-				portsField = parts[3]
-			}
-			labelsField := ""
-			if len(parts) >= 5 {
-				labelsField = parts[4]
-			}
-			labelMap := parseLabels(labelsField)
-			for k, v := range cfg.LabelOverrides[name] {
-				labelMap[k] = v
-			}
-			createdAt := time.Time{}
-			if len(parts) >= 6 {
-				createdAt = parseDockerTime(parts[5])
-			}
-			// Determine if this container belongs to the selected image
-			belongs := false
-			if imgNameFromCfg, ok := cfg.ContainerImages[name]; ok && imgNameFromCfg == imgName {
-				belongs = true
-			}
-			if !belongs {
-				if labelMap["com.dv.owner"] == "dv" && labelMap["com.dv.image-name"] == imgName {
-					belongs = true
-				}
-			}
-			if !belongs {
-				// Legacy fallback: match by raw image tag
-				if image == imgCfg.Tag {
-					belongs = true
-				}
-			}
-			if !belongs {
-				continue
-			}
-
-			// Parse status and time
-			statusText, timeText := parseStatus(status)
-			urls := parseHostPortURLs(portsField)
-			if proxyActive {
-				if host, _, _, httpPort, ok := localproxy.RouteFromLabels(labelMap); ok && host != "" {
-					lp := cfg.LocalProxy
-					lp.ApplyDefaults()
-					if lp.HTTPS {
-						if lp.HTTPSPort > 0 && lp.HTTPSPort != 443 {
-							urls = []string{fmt.Sprintf("https://%s:%d", host, lp.HTTPSPort)}
-						} else {
-							urls = []string{"https://" + host}
-						}
-					} else {
-						if httpPort <= 0 {
-							httpPort = lp.HTTPPort
-						}
-						if httpPort > 0 && httpPort != 80 {
-							urls = []string{fmt.Sprintf("http://%s:%d", host, httpPort)}
-						} else {
-							urls = []string{"http://" + host}
-						}
-					}
-				}
-			}
-
+		records, err := collectContainerInventory(cmd.Context(), cfg, imgName, imgCfg, selected, nil)
+		if err != nil {
+			return err
+		}
+		agents := make([]agentInfo, 0, len(records))
+		for _, record := range records {
 			agents = append(agents, agentInfo{
-				name:      name,
-				status:    statusText,
-				time:      timeText,
-				createdAt: createdAt,
-				urls:      urls,
-				selected:  selected != "" && name == selected,
+				name:      record.name,
+				status:    record.status,
+				time:      record.time,
+				createdAt: record.createdAt,
+				urls:      record.urls,
+				selected:  record.selected,
 			})
 		}
-
-		sortAgents(agents)
 
 		withSessions, _ := cmd.Flags().GetBool("sessions")
 		if withSessions {

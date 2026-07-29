@@ -70,7 +70,7 @@ func TestRemovePreRemoveFailureAbortsDockerRemoval(t *testing.T) {
 	}
 }
 
-func TestRemoveDockerFailureCleansConfigButSkipsPostRemove(t *testing.T) {
+func TestRemoveDockerFailurePreservesConfigAndSkipsPostRemove(t *testing.T) {
 	configDir := setupRemoveTestConfig(t, func(cfg *config.Config, orderPath string) {
 		cfg.Hooks.PreRemove = []config.HostHook{{Command: fmt.Sprintf("printf 'pre\\n' >> %s", shellQuote(orderPath))}}
 		cfg.Hooks.PostRemove = []config.HostHook{{Command: fmt.Sprintf("printf 'post\\n' >> %s", shellQuote(orderPath))}}
@@ -97,14 +97,14 @@ func TestRemoveDockerFailureCleansConfigButSkipsPostRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
-	if _, ok := cfg.ContainerImages["agent-one"]; ok {
-		t.Fatal("ContainerImages[agent-one] was not cleaned up")
+	if _, ok := cfg.ContainerImages["agent-one"]; !ok {
+		t.Fatal("ContainerImages[agent-one] was removed after Docker failure")
 	}
-	if _, ok := cfg.LabelOverrides["agent-one"]; ok {
-		t.Fatal("LabelOverrides[agent-one] was not cleaned up")
+	if _, ok := cfg.LabelOverrides["agent-one"]; !ok {
+		t.Fatal("LabelOverrides[agent-one] was removed after Docker failure")
 	}
-	if _, ok := cfg.CustomWorkdirs["agent-one"]; ok {
-		t.Fatal("CustomWorkdirs[agent-one] was not cleaned up")
+	if _, ok := cfg.CustomWorkdirs["agent-one"]; !ok {
+		t.Fatal("CustomWorkdirs[agent-one] was removed after Docker failure")
 	}
 }
 
