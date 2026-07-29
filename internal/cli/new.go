@@ -1,15 +1,17 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"dv/internal/config"
 	"dv/internal/docker"
@@ -60,12 +62,13 @@ var newCmd = &cobra.Command{
 					return fmt.Errorf("read template: %w", err)
 				}
 			}
-			tpl = &templateConfig{}
-			if err = yaml.Unmarshal(data, tpl); err != nil {
-				return fmt.Errorf("parse template YAML: %w", err)
+			tpl, err = parseTemplateConfig(bytes.NewReader(data))
+			if err != nil {
+				return fmt.Errorf("template %q: %w", templatePath, err)
 			}
 		}
 
+		sshRequiredByArgs := false
 		pluginInputs, _ := cmd.Flags().GetStringArray("plugin")
 		pluginFlags, err := resolvePluginSpecs(pluginInputs)
 		if err != nil {
@@ -78,7 +81,7 @@ var newCmd = &cobra.Command{
 			tpl.Plugins = append(tpl.Plugins, pluginFlags...)
 			for _, input := range pluginInputs {
 				if pluginSpecNeedsSSH(input) {
-					tpl.Git.SSHForward = true
+					sshRequiredByArgs = true
 					break
 				}
 			}
@@ -96,10 +99,22 @@ var newCmd = &cobra.Command{
 			tpl.Themes = append(tpl.Themes, themeFlags...)
 			for _, input := range themeInputs {
 				if gitSpecNeedsSSH(input) {
-					tpl.Git.SSHForward = true
+					sshRequiredByArgs = true
 					break
 				}
 			}
+		}
+
+		sshRequired := sshRequiredByArgs || templateNeedsSSH(tpl)
+		setting := sshForwardSetting{}
+		if tpl != nil {
+			setting = tpl.Git.SSHForward
+		}
+
+		sshForwardFlag, _ := cmd.Flags().GetString("ssh-forward")
+		sshForwardMode, err := resolveSSHForwardMode(sshForwardFlag, setting, sshRequired)
+		if err != nil {
+			return err
 		}
 
 		prFlagStr, _ := cmd.Flags().GetString("pr")
@@ -220,19 +235,18 @@ var newCmd = &cobra.Command{
 		}
 
 		sshAuthSock := ""
-		if tpl != nil && tpl.Git.SSHForward {
+		if sshForwardMode.enabled() {
 			sshAuthSock = os.Getenv("SSH_AUTH_SOCK")
 			if sshAuthSock == "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: ssh_forward enabled in template but SSH_AUTH_SOCK is not set on host.")
-			} else {
-				// Test actual SSH connectivity to GitHub (works with IdentityAgent like 1Password)
-				out, err := exec.Command("ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "git@github.com").CombinedOutput()
-				// ssh -T returns exit code 1 even on success ("successfully authenticated")
-				if err != nil && !strings.Contains(string(out), "successfully authenticated") {
-					fmt.Fprintln(cmd.ErrOrStderr(), "Warning: SSH to GitHub failed. Check your SSH key setup.")
-					if verbose || isTruthyEnv("DV_VERBOSE") {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  SSH output: %s\n", strings.TrimSpace(string(out)))
-					}
+				return fmt.Errorf("SSH forwarding mode %q requires SSH_AUTH_SOCK to be set on the host", sshForwardMode)
+			}
+			// Test actual SSH connectivity to GitHub (works with IdentityAgent like 1Password)
+			out, err := exec.Command("ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "git@github.com").CombinedOutput()
+			// ssh -T returns exit code 1 even on success ("successfully authenticated")
+			if err != nil && !strings.Contains(string(out), "successfully authenticated") {
+				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: SSH to GitHub failed. Check your SSH key setup.")
+				if verbose || isTruthyEnv("DV_VERBOSE") {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  SSH output: %s\n", strings.TrimSpace(string(out)))
 				}
 			}
 		}
@@ -277,6 +291,11 @@ var newCmd = &cobra.Command{
 			return err
 		}
 		containerCreated = lifecycle.Created
+		if sshForwardMode.enabled() {
+			if err := setupContainerSSHForwarding(cmd, name, workdir, true); err != nil {
+				return err
+			}
+		}
 
 		if cfg.ContainerImages == nil {
 			cfg.ContainerImages = map[string]string{}
@@ -299,12 +318,18 @@ var newCmd = &cobra.Command{
 				tpl.Discourse.Branch = branchFlag
 			}
 
-			if err = executeTemplate(cmd, cfg, name, workdir, tpl, sshAuthSock, verbose, withoutTestDB); err != nil {
+			if err = executeTemplate(cmd, cfg, name, workdir, tpl, sshForwardMode, sshAuthSock, verbose, withoutTestDB); err != nil {
 				return err
 			}
 		}
 
 		provisioningComplete = true
+		if sshForwardMode == sshForwardProvisioning {
+			if err = sealProvisionedContainer(cmd, cfg, name, workdir, imageTag, imgName, lifecycle, templateEnvs, templateMounts); err != nil {
+				return fmt.Errorf("agent was provisioned but SSH forwarding could not be removed safely: %w", err)
+			}
+		}
+
 		hookCtx := hostHookContext{
 			CommandName:   "new",
 			ContainerName: name,
@@ -331,12 +356,129 @@ var newCmd = &cobra.Command{
 	},
 }
 
+func templateNeedsSSH(tpl *templateConfig) bool {
+	if tpl == nil {
+		return false
+	}
+	if gitSpecNeedsSSH(tpl.Discourse.Repo) {
+		return true
+	}
+	for _, plugin := range tpl.Plugins {
+		if gitSpecNeedsSSH(plugin.Repo) {
+			return true
+		}
+	}
+	for _, theme := range tpl.Themes {
+		if gitSpecNeedsSSH(theme.Repo) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldRollbackNewSelection(err error, provisioningComplete bool) bool {
 	return err != nil && !provisioningComplete
 }
 
 func shouldCleanupNewContainer(err error, containerCreated, provisioningComplete, keepOnFailure bool) bool {
 	return err != nil && containerCreated && !provisioningComplete && !keepOnFailure
+}
+
+func sealProvisionedContainer(cmd *cobra.Command, cfg config.Config, name, workdir, imageTag, imgName string, lifecycle containerLifecycleResult, templateEnvs map[string]string, templateMounts []docker.Mount) error {
+	fmt.Fprintln(cmd.OutOrStdout(), "Sealing container without SSH agent access...")
+	_, _ = docker.ExecOutput(name, workdir, nil, []string{"bash", "-lc", "sudo /usr/bin/sv force-stop rails ember || true"})
+	if err := docker.Stop(name); err != nil {
+		// If Docker cannot stop the SSH-enabled container, removing it is the only
+		// reliable way to avoid leaving live access to the host agent.
+		_ = docker.RemoveForce(name)
+		return fmt.Errorf("stop SSH-enabled container (forced removal attempted): %w", err)
+	}
+
+	snapshotID := time.Now().UnixNano()
+	snapshotImage := fmt.Sprintf("dv-provisioned-snapshot:%d", snapshotID)
+	if err := docker.CommitContainerWithChanges(name, snapshotImage, []string{"ENV SSH_AUTH_SOCK="}); err != nil {
+		return fmt.Errorf("snapshot provisioned container: %w; container retained stopped with SSH forwarding still configured", err)
+	}
+	defer docker.RemoveImageQuiet(snapshotImage)
+
+	backupName := fmt.Sprintf("%s-dv-ssh-backup-%d", name, snapshotID)
+	if err := docker.Rename(name, backupName); err != nil {
+		return fmt.Errorf("preserve SSH-enabled provisioning container: %w; container retained stopped with SSH forwarding still configured", err)
+	}
+	rollback := func() error {
+		var rollbackErrs []error
+		if docker.Exists(name) {
+			if err := docker.RemoveForce(name); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("remove partial sealed container %q: %w", name, err))
+			}
+		}
+		if docker.Exists(backupName) {
+			_ = docker.Stop(backupName)
+			if docker.Exists(name) {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("cannot restore SSH-enabled backup %q while container %q still exists", backupName, name))
+			} else if err := docker.Rename(backupName, name); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore stopped SSH-enabled backup %q: %w", backupName, err))
+			}
+		}
+		return errors.Join(rollbackErrs...)
+	}
+	withRollback := func(operationErr error) error {
+		if rollbackErr := rollback(); rollbackErr != nil {
+			return fmt.Errorf("%w; rollback also failed: %v (remove any stopped SSH-enabled backup manually)", operationErr, rollbackErr)
+		}
+		return fmt.Errorf("%w; provisioned container retained stopped with SSH forwarding still configured", operationErr)
+	}
+
+	labels := map[string]string{
+		"com.dv.owner":      "dv",
+		"com.dv.image-name": imgName,
+		"com.dv.image-tag":  imageTag,
+	}
+	envs := map[string]string{
+		"DISCOURSE_PORT": fmt.Sprintf("%d", lifecycle.HostPort),
+	}
+	for key, value := range templateEnvs {
+		if key != "SSH_AUTH_SOCK" {
+			envs[key] = value
+		}
+	}
+	extraHosts := []string{}
+	proxyHost := applyLocalProxyMetadata(cfg, name, lifecycle.HostPort, lifecycle.ContainerPort, labels, envs)
+	if proxyHost != "" {
+		extraHosts = append(extraHosts, fmt.Sprintf("%s:127.0.0.1", proxyHost))
+	}
+
+	if err := docker.RunDetached(name, workdir, snapshotImage, lifecycle.HostPort, lifecycle.ContainerPort, labels, envs, extraHosts, "", templateMounts); err != nil {
+		return withRollback(fmt.Errorf("recreate container without SSH forwarding: %w", err))
+	}
+	hasMount, err := docker.ContainerHasMount(name, "/tmp/ssh-agent.sock")
+	if err != nil {
+		return withRollback(fmt.Errorf("verify SSH forwarding removal: %w", err))
+	}
+	if hasMount {
+		return withRollback(fmt.Errorf("verify SSH forwarding removal: container still has /tmp/ssh-agent.sock mounted"))
+	}
+	envsAfterSeal, err := docker.GetContainerEnv(name)
+	if err != nil {
+		return withRollback(fmt.Errorf("verify SSH forwarding environment removal: %w", err))
+	}
+	if envsAfterSeal["SSH_AUTH_SOCK"] == "/tmp/ssh-agent.sock" {
+		return withRollback(fmt.Errorf("verify SSH forwarding environment removal: SSH_AUTH_SOCK still points to the agent socket"))
+	}
+	if err := docker.Remove(backupName); err != nil {
+		_ = docker.RemoveForce(backupName)
+		if docker.Exists(backupName) {
+			_ = docker.Stop(backupName)
+			return fmt.Errorf("sealed container is running safely, but stopped SSH-enabled backup %q could not be removed: %w; remove it manually with docker rm -f %s", backupName, err, backupName)
+		}
+	}
+
+	if proxyHost != "" {
+		time.Sleep(500 * time.Millisecond)
+		registerWithLocalProxy(cmd, cfg, name, proxyHost, lifecycle.ContainerPort)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "SSH agent forwarding removed.")
+	return nil
 }
 
 func confirmInvalidRailsHostname(cmd *cobra.Command, name string) (bool, error) {
@@ -484,7 +626,7 @@ func buildMaintenanceScript(withoutTestDB bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string, tpl *templateConfig, sshAuthSock string, verbose bool, withoutTestDB bool) (err error) {
+func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string, tpl *templateConfig, sshForwardMode sshForwardMode, sshAuthSock string, verbose bool, withoutTestDB bool) (err error) {
 	// 1. Env variables
 	envList := collectEnvPassthrough(cfg)
 	if len(tpl.Env) > 0 {
@@ -494,12 +636,9 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 		}
 	}
 
-	// 1.5 SSH Forwarding setup
-	if tpl.Git.SSHForward && sshAuthSock != "" {
+	// 1.5 SSH Forwarding environment
+	if sshForwardMode.enabled() && sshAuthSock != "" {
 		envList = append(envList, "SSH_AUTH_SOCK=/tmp/ssh-agent.sock")
-		if err := setupContainerSSHForwarding(cmd, name, workdir, false); err != nil {
-			return err
-		}
 	}
 
 	// 2. Maintenance Mode: Stop Services
@@ -697,7 +836,8 @@ func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string
 
 func init() {
 	newCmd.Flags().String("image", "", "Image to use (defaults to selected image)")
-	newCmd.Flags().String("template", "", "Path to a template YAML file")
+	newCmd.Flags().String("template", "", "Path or HTTP(S) URL of a template YAML file")
+	newCmd.Flags().String("ssh-forward", "", "SSH agent forwarding mode: off, provisioning, or always (overrides template)")
 	newCmd.Flags().Bool("keep-on-failure", false, "Keep the container even if provisioning fails")
 	newCmd.Flags().BoolP("verbose", "v", false, "Print verbose debugging output")
 	newCmd.Flags().String("pr", "", "PR number or search query to checkout")
@@ -706,6 +846,9 @@ func init() {
 	newCmd.Flags().StringArray("plugin-local", nil, "Bind-mount a local plugin directory into the new agent (PATH to a plugin repo; repeatable)")
 	newCmd.Flags().StringArray("theme", nil, "Install and enable theme/component (NAME, OWNER/REPO[#PR], git URL, or GitHub PR URL; repeatable)")
 	newCmd.Flags().Bool("without-test-db", false, "Skip test database migration during provisioning")
+	_ = newCmd.RegisterFlagCompletionFunc("ssh-forward", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"off", "provisioning", "always"}, cobra.ShellCompDirectiveNoFileComp
+	})
 
 	newCmd.RegisterFlagCompletionFunc("pr", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		configDir, err := xdg.ConfigDir()

@@ -476,6 +476,31 @@ func TestParseContainerMounts(t *testing.T) {
 	}
 }
 
+func TestContainerHasMount(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`[
+	  {"Type":"bind","Source":"/run/host-services/ssh-auth.sock","Destination":"/tmp/ssh-agent.sock","RW":true},
+	  {"Type":"bind","Source":"/host/project","Destination":"/workspace","RW":true}
+	]`)
+	for _, tt := range []struct {
+		destination string
+		want        bool
+	}{
+		{destination: "/tmp/ssh-agent.sock", want: true},
+		{destination: "/workspace", want: true},
+		{destination: "/missing", want: false},
+	} {
+		got, err := containerHasMount(input, tt.destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tt.want {
+			t.Errorf("containerHasMount(%q) = %t, want %t", tt.destination, got, tt.want)
+		}
+	}
+}
+
 func TestParseContainerMountsEmpty(t *testing.T) {
 	t.Parallel()
 	got, err := parseContainerMounts([]byte(`[]`))

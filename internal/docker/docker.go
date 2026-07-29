@@ -837,7 +837,18 @@ func GetContainerHostPort(name string, containerPort int) (int, error) {
 
 // CommitContainer creates an image from a container's current filesystem state.
 func CommitContainer(name, imageTag string) error {
-	cmd := exec.Command("docker", "commit", name, imageTag)
+	return CommitContainerWithChanges(name, imageTag, nil)
+}
+
+// CommitContainerWithChanges creates an image from a container's current
+// filesystem state and applies Dockerfile-style configuration changes.
+func CommitContainerWithChanges(name, imageTag string, changes []string) error {
+	args := []string{"commit"}
+	for _, change := range changes {
+		args = append(args, "--change", change)
+	}
+	args = append(args, name, imageTag)
+	cmd := exec.Command("docker", args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -1045,6 +1056,30 @@ func GetContainerMounts(name string) ([]Mount, error) {
 		return nil, err
 	}
 	return parseContainerMounts(out)
+}
+
+// ContainerHasMount reports whether Docker configured a mount at destination.
+func ContainerHasMount(name, destination string) (bool, error) {
+	out, err := exec.Command("docker", "inspect", "-f", "{{json .Mounts}}", name).Output()
+	if err != nil {
+		return false, err
+	}
+	return containerHasMount(out, destination)
+}
+
+func containerHasMount(data []byte, destination string) (bool, error) {
+	var mounts []struct {
+		Destination string `json:"Destination"`
+	}
+	if err := json.Unmarshal(data, &mounts); err != nil {
+		return false, err
+	}
+	for _, mount := range mounts {
+		if mount.Destination == destination {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func parseContainerMounts(data []byte) ([]Mount, error) {

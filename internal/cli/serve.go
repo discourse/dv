@@ -182,6 +182,7 @@ type newAgentRequest struct {
 	Name          string   `json:"name"`
 	Image         string   `json:"image"`
 	Template      string   `json:"template"`
+	SSHForward    string   `json:"ssh_forward"`
 	KeepOnFailure bool     `json:"keep_on_failure"`
 	Verbose       bool     `json:"verbose"`
 	PR            string   `json:"pr"`
@@ -199,6 +200,9 @@ func (req newAgentRequest) args() []string {
 	}
 	if req.Template != "" {
 		args = append(args, "--template", req.Template)
+	}
+	if req.SSHForward != "" {
+		args = append(args, "--ssh-forward", req.SSHForward)
 	}
 	if req.KeepOnFailure {
 		args = append(args, "--keep-on-failure")

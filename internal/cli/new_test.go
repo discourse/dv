@@ -75,6 +75,36 @@ func TestConfirmInvalidRailsHostname(t *testing.T) {
 	})
 }
 
+func TestTemplateNeedsSSH(t *testing.T) {
+	t.Parallel()
+
+	if templateNeedsSSH(nil) {
+		t.Fatal("nil template should not require SSH")
+	}
+	for _, field := range []string{"discourse", "plugin", "theme"} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			tpl := &templateConfig{}
+			switch field {
+			case "discourse":
+				tpl.Discourse.Repo = "git@github.com:example/discourse.git"
+			case "plugin":
+				tpl.Plugins = []templatePlugin{{Repo: "ssh://git@example.com/plugin.git"}}
+			case "theme":
+				tpl.Themes = []templateTheme{{Repo: "git@github.com:example/theme.git"}}
+			}
+			if !templateNeedsSSH(tpl) {
+				t.Fatalf("%s SSH repository was not detected", field)
+			}
+		})
+	}
+	tpl := &templateConfig{}
+	tpl.Plugins = []templatePlugin{{Repo: "https://github.com/example/plugin.git"}}
+	if templateNeedsSSH(tpl) {
+		t.Fatal("HTTPS repository should not require SSH")
+	}
+}
+
 func TestNewFailureCleanupGuards(t *testing.T) {
 	t.Parallel()
 

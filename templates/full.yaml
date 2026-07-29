@@ -11,10 +11,12 @@ discourse:
 
 # 2. Git Configuration
 git:
-  # Enable SSH agent forwarding so the container can access your private repos.
-  # Requires SSH_AUTH_SOCK to be set on your host.
-  ssh_forward: true
-  # allows cloning of repos at: git@github.com:your-org/private-plugin.git
+  # Values: off (default), provisioning (recommended for private setup), always.
+  # `provisioning` mounts the host SSH agent only until setup completes, then dv
+  # recreates the ready container without the socket. Requires SSH_AUTH_SOCK.
+  # Legacy true/false values mean always/off, respectively.
+  ssh_forward: off
+  # Use provisioning with repos such as git@github.com:your-org/private-plugin.git
 
 # 3. Environment Variables
 # These will be set inside the container for all future commands.
@@ -31,7 +33,14 @@ copy:
   - host: "./README.md"
     container: "/home/discourse/README-from-host.md"
 
-# 5. Plugins
+# 5. Bind Mounts
+# Unlike copy rules, mounts remain linked to the host path.
+# mounts:
+#   - host: "~/src/local-plugin"
+#     container: "/var/www/discourse/plugins/local-plugin"
+#     read_only: false
+
+# 6. Plugins
 # Specify additional plugins to be cloned into the container.
 plugins:
   - repo: https://github.com/discourse/discourse-solved.git
@@ -39,7 +48,7 @@ plugins:
     # path: plugins/discourse-solved # Default: plugins/<repo-name>
   - repo: https://github.com/discourse/discourse-voting.git
 
-# 6. Themes
+# 7. Themes
 # Install themes or theme components. They are uploaded and enabled by default:
 # components are attached to the default theme; full themes become the default theme.
 # Use `pr:` or OWNER/REPO#PR to test a pull request.
@@ -52,7 +61,7 @@ themes:
     # pr: 123
     # enabled: false # Upload/watch only; don't attach or make default
 
-# 7. Site Settings
+# 8. Site Settings
 # Automatically set Discourse site settings after the container is ready.
 # Values can be strings, numbers, or booleans.
 settings:
@@ -61,13 +70,13 @@ settings:
   enable_experimental_features: true
   max_topic_title_length: 255
 
-# 8. Post-Creation Commands
+# 9. Post-Creation Commands
 # Arbitrary bash commands to run inside the container during provisioning.
 on_create:
   - "echo 'Provisioning in progress...'"
   - "sudo apt-get update && sudo apt-get install -y htop"
 
-# 9. MCP (Model Context Protocol) Servers
+# 10. MCP (Model Context Protocol) Servers
 # Register MCP servers for use with AI agents inside the container.
 mcp:
   # Stock MCP servers: "playwright", "discourse", "chrome-devtools"

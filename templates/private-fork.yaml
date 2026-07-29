@@ -14,5 +14,5 @@ discourse:
 
 git:
   # Requires SSH_AUTH_SOCK to be set on the host and your SSH key to have
-  # access to the private repository above.
-  ssh_forward: true
+  # access to the private repository above. The socket is removed after setup.
+  ssh_forward: provisioning

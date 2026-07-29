@@ -307,6 +307,8 @@ dv new --without-test-db fast-agent
 dv new --plugin discourse-kanban kanban
 dv new --plugin discourse/discourse-kanban kanban
 dv new --plugin git@github.com:my-org/private-plugin.git private-test
+# SSH URLs use provisioning-only forwarding by default; override when needed:
+dv new --ssh-forward=always --plugin git@github.com:my-org/private-plugin.git private-test
 dv new --plugin-local ~/work/second-brain
 dv new --plugin-local ~/work/second-brain sb
 dv new --theme discourse-mermaid-theme-component mermaid
@@ -350,7 +352,7 @@ dv plugin add --skip-maintenance discourse-kanban
 Notes:
 - `dv plugin add` clones plugins into `/var/www/discourse/plugins/<repo-name>` by default.
 - After cloning, it runs bundle install and database migrations unless `--skip-maintenance` is used.
-- SSH plugin URLs require SSH agent forwarding in the target container. `dv new --plugin git@github.com:owner/repo.git ...` enables this for the new agent automatically; for `dv plugin add git@...`, use an agent that was created with SSH forwarding or use an HTTPS URL.
+- SSH plugin URLs require SSH agent forwarding in the target container. `dv new --plugin git@github.com:owner/repo.git ...` automatically uses provisioning-only forwarding, then recreates the ready container without the agent socket. If you need later `dv plugin add git@...` operations, create the agent with `--ssh-forward=always`; otherwise use an HTTPS URL.
 - Use `dv plugin --name NAME add ...` to target a specific running agent.
 
 ### Templates
@@ -370,9 +372,34 @@ Templates support:
 - **Discourse Configuration**: Specify branches, PRs, or custom repos.
 - **Plugins & Themes**: Automatically clone plugins and install/enable/watch themes.
 - **Site Settings**: Set Discourse settings (title, theme, experimental features) on boot.
-- **Copy Rules**: Sync host files (like `.gitconfig` or API keys) into the container.
+- **Copy Rules & Mounts**: Copy files into an agent or bind-mount host paths.
+- **Environment**: Persist template-specific environment variables in the container.
 - **Provisioning**: Run arbitrary bash commands inside the container via `on_create`.
 - **MCP Servers**: Register Model Context Protocol servers for AI agents.
+
+#### SSH agent forwarding
+
+Private repositories can use the host SSH agent during provisioning:
+
+```yaml
+git:
+  ssh_forward: provisioning
+
+plugins:
+  - repo: git@github.com:your-org/private-plugin.git
+```
+
+`git.ssh_forward` accepts these modes:
+
+- `off` (the default): never mount the host agent socket.
+- `provisioning`: make the socket available while the template is being provisioned, then stop, snapshot, and recreate the ready container without the socket mount. This is the recommended mode for private setup dependencies.
+- `always`: keep the socket mounted for the lifetime of the container, including later commands such as `dv plugin add git@...`.
+
+The legacy YAML booleans remain supported: `true` means `always`, and `false` means `off`. `dv new --ssh-forward=off|provisioning|always` overrides the template. SSH repository URLs in template `discourse.repo`, `plugins`, or `themes` entries, and SSH `--plugin` or `--theme` arguments, infer `provisioning` when no mode was explicitly selected. An explicit `off` with an SSH repository URL is rejected before container creation.
+
+Forwarding requires `SSH_AUTH_SOCK` to be set on the host. `dv new` fails before creating the container when forwarding is requested but the variable is unset. While forwarding is active, software in the container can ask the host agent to sign requests; private keys are not copied into the container. After `provisioning` mode seals the container, SSH remotes remain configured but future fetches require recreating the agent with `always` or changing those remotes to an accessible HTTPS URL.
+
+Template parsing is strict: unknown or misspelled fields, unsupported `ssh_forward` values, and multiple YAML documents are rejected before a container is created. This prevents a typo from silently disabling a security-sensitive setting.
 
 See [templates/full.yaml](./templates/full.yaml) for a complete example of all available features.
 
@@ -626,6 +653,7 @@ supports all non-interactive `dv new` options:
   "name": "core-pr-12345",
   "image": "discourse",
   "template": "/path/to/template.yml",
+  "ssh_forward": "provisioning",
   "keep_on_failure": false,
   "verbose": false,
   "pr": "12345",
