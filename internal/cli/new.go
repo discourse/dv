@@ -443,10 +443,9 @@ func buildMaintenanceScript(withoutTestDB bool) string {
 		"FAILED_LOG=/tmp/dv-bundle.log",
 		"bundle install > $FAILED_LOG 2>&1",
 		"",
-		"echo \"Waiting for PostgreSQL to be ready...\"",
-		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo \"PostgreSQL did not become ready\"; exit 1)",
-		"",
 	}
+	lines = append(lines, buildPostgresReadinessCommands()...)
+	lines = append(lines, "")
 
 	if withoutTestDB {
 		lines = append(lines,

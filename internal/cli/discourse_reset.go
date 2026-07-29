@@ -28,14 +28,26 @@ func buildPostCheckoutCommands() []string {
 	}
 }
 
+// buildPostgresReadinessCommands generates a readiness barrier for commands that
+// boot Rails. Docker reports a container as running before PostgreSQL has
+// necessarily finished startup recovery.
+func buildPostgresReadinessCommands() []string {
+	return []string{
+		"echo 'Waiting for PostgreSQL to be ready...'",
+		"timeout 120 bash -c 'until [ -S /var/run/postgresql/.s.PGSQL.5432 ] && pg_isready -q > /dev/null 2>&1; do sleep 1; done' || (echo 'PostgreSQL did not become ready'; exit 1)",
+	}
+}
+
 // buildAssetsClobberCommands generates commands to remove compiled Rails assets
 // after changing Discourse branches. A stale asset manifest makes Rails serve
 // static compiled assets instead of recompiling stylesheet changes in development.
+// Since bin/rails boots the application, wait for PostgreSQL before invoking it.
 func buildAssetsClobberCommands() []string {
-	return []string{
+	cmds := buildPostgresReadinessCommands()
+	return append(cmds,
 		"echo 'Clobbering compiled assets so development assets recompile...'",
 		"bin/rails assets:clobber",
-	}
+	)
 }
 
 // buildDatabaseDropCreateMigrateCommands generates commands to drop, create, and migrate databases.
@@ -47,10 +59,9 @@ func buildDatabaseDropCreateMigrateCommands(opts discourseResetScriptOpts) []str
 		"sudo -n true 2>/dev/null || true",
 		"sudo /usr/bin/sv force-stop rails || sudo sv force-stop rails || true",
 		"sudo /usr/bin/sv force-stop ember || sudo sv force-stop ember || true",
-		"echo 'Waiting for PostgreSQL to be ready...'",
-		"timeout 30 bash -c 'until pg_isready > /dev/null 2>&1; do sleep 1; done' || (echo 'PostgreSQL did not become ready'; exit 1)",
-		"MIG_LOG_DEV=/tmp/dv-migrate-dev-$(date +%s).log",
 	}
+	cmds = append(cmds, buildPostgresReadinessCommands()...)
+	cmds = append(cmds, "MIG_LOG_DEV=/tmp/dv-migrate-dev-$(date +%s).log")
 	if !opts.WithoutTestDB {
 		cmds = append(cmds, "MIG_LOG_TEST=/tmp/dv-migrate-test-$(date +%s).log")
 	}
