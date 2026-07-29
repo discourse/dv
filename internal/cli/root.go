@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -22,8 +23,42 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// errHelpShownForMissingArgs signals that a command was invoked without its
+// required arguments and help was already printed; the error itself should not
+// be shown to the user.
+var errHelpShownForMissingArgs = errors.New("help shown for missing arguments")
+
 func Execute() error {
-	return rootCmd.Execute()
+	// Applied here rather than in init() so commands registered by other
+	// files' init functions (e.g. upgrade) are covered too.
+	showHelpOnMissingArgs(rootCmd)
+	err := rootCmd.Execute()
+	if errors.Is(err, errHelpShownForMissingArgs) {
+		os.Exit(1)
+	}
+	return err
+}
+
+// showHelpOnMissingArgs wraps every command's positional-argument validator so
+// that running a command that requires arguments with none at all prints that
+// command's help instead of an error like "accepts 2 arg(s), received 0".
+// Validation errors with some (wrong number of) arguments are unchanged.
+func showHelpOnMissingArgs(cmd *cobra.Command) {
+	for _, c := range cmd.Commands() {
+		showHelpOnMissingArgs(c)
+		orig := c.Args
+		if orig == nil {
+			continue
+		}
+		c.Args = func(cc *cobra.Command, args []string) error {
+			err := orig(cc, args)
+			if err != nil && len(args) == 0 {
+				_ = cc.Help()
+				return errHelpShownForMissingArgs
+			}
+			return err
+		}
+	}
 }
 
 func addPersistentFlags(cmd *cobra.Command) {
