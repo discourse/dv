@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
@@ -22,8 +24,56 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+var (
+	errHelpShownForMissingArgs = errors.New("help shown for missing arguments")
+	configureMissingArgsHelp   sync.Once
+)
+
 func Execute() error {
+	// Decorate after all package init functions have registered their commands.
+	// sync.Once keeps repeated in-process executions from stacking wrappers.
+	configureMissingArgsHelp.Do(func() {
+		showHelpOnMissingArgs(rootCmd)
+	})
 	return rootCmd.Execute()
+}
+
+// IsSilentError reports whether err has already been presented to the user and
+// should only affect the process exit status.
+func IsSilentError(err error) bool {
+	return errors.Is(err, errHelpShownForMissingArgs)
+}
+
+const missingArgsHelpAnnotation = "dv.dev/help-on-missing-args"
+
+// showHelpOnMissingArgs recursively decorates positional argument validators.
+// Only the no-argument case is changed; other validation errors retain their
+// original, more specific diagnostics.
+func showHelpOnMissingArgs(cmd *cobra.Command) {
+	for _, child := range cmd.Commands() {
+		showHelpOnMissingArgs(child)
+		original := child.Args
+		if original == nil || child.Annotations[missingArgsHelpAnnotation] == "true" {
+			continue
+		}
+		if child.Annotations == nil {
+			child.Annotations = make(map[string]string)
+		}
+		child.Annotations[missingArgsHelpAnnotation] = "true"
+		child.Args = func(current *cobra.Command, args []string) error {
+			err := original(current, args)
+			if err == nil || len(args) != 0 {
+				return err
+			}
+			// Missing required arguments are an unsuccessful invocation, so keep
+			// help out of stdout while avoiding a redundant arity error.
+			originalOut := current.OutOrStdout()
+			current.SetOut(current.ErrOrStderr())
+			_ = current.Help()
+			current.SetOut(originalOut)
+			return errHelpShownForMissingArgs
+		}
+	}
 }
 
 func addPersistentFlags(cmd *cobra.Command) {
@@ -91,7 +141,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	// branchCmd, prCmd, and upgradeCmd are registered in their own files but
 	// grouped here so the whole layout is visible in one place.
 	groups := map[string][]*cobra.Command{
-		groupDaily:     {enterCmd, restartCmd, resetCmd, runCmd, runAgentCmd, tuiCmd, branchCmd, prCmd, catchupCmd, copyCmd},
+		groupDaily:     {enterCmd, consoleCmd, restartCmd, resetCmd, runCmd, runAgentCmd, tuiCmd, branchCmd, prCmd, catchupCmd, copyCmd},
 		groupLifecycle: {newCmd, startCmd, stopCmd, removeCmd, listCmd, selectCmd, renameCmd, psCmd},
 		groupCode:      {importCmd, extractCmd, pluginCmd},
 		groupTools:     {buildCmd, pullCmd, imageCmd, exposeCmd, mailCmd, serveCmd, configCmd, dataCmd, updateCmd, upgradeCmd, versionCmd},
@@ -105,6 +155,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	rootCmd.AddCommand(buildCmd)
 	rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(enterCmd)
+	rootCmd.AddCommand(consoleCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(runAgentCmd)
 	rootCmd.AddCommand(copyCmd)

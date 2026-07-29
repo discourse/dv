@@ -68,11 +68,12 @@ With `dv` installed (either via the script or `go build`), run the CLI directly 
    ```bash
    dv start
    ```
-3. Enter the container, or run a one-off command without opening a shell:
+3. Enter the container, open a Rails console, or run a one-off command:
    ```bash
    dv enter
+   dv console
    # run a single command
-   dv run -- bin/rails c
+   dv run -- bin/rails runner 'puts SiteSetting.title'
    ```
 4. Extract changes from the container (when ready to create a PR):
    ```bash
@@ -94,6 +95,11 @@ dv rename old new                         # rename an agent
 ```
 
 ## dv Commands
+
+### CLI argument errors
+When a command that requires positional arguments is invoked with none, `dv` prints that command's help to stderr and exits with status 1. Other argument-count errors retain their specific diagnostic.
+
+For example, `dv image add` shows the usage for `dv image add NAME` rather than only reporting that an argument is missing.
 
 ### dv build
 Build the Docker image (defaults to tag `ai_agent`).
@@ -176,6 +182,21 @@ Notes for `dv reset git`:
 - Discards local code changes in the container.
 - Syncs with the upstream branch.
 - Reinstalls dependencies and runs migrations.
+
+### dv console
+Open an interactive Rails console in a running or stopped Discourse container.
+
+```bash
+dv console [NAME]
+dv console --name NAME
+```
+
+Notes:
+- Starts the selected container when necessary and waits for PostgreSQL before booting Rails.
+- Always runs from the configured Discourse image workdir, even when the container has a custom workspace override.
+- Labels the Pry prompt with the container name while preserving the first existing Pry config from the XDG Pry location (normally `~/.config/pry/pryrc`) or `~/.pryrc`.
+- Passes configured environment variables but does not apply `copyRules` or modify the worktree before opening the console.
+- Only works with containers using the `discourse` image kind.
 
 ### dv enter
 Attach to the running container as user `discourse` in the workdir and open an interactive shell.
@@ -459,9 +480,14 @@ Checkout a git branch in the container and reset the development environment.
 
 ```bash
 dv branch [--name NAME] [--no-reset] [--new] BRANCH
+dv branch status [--name NAME]
 ```
 
 Notes:
+- `dv branch status [--name NAME]` reports the current branch and Git porcelain status for the container's configured workdir (`XY path`, with `??` for untracked files).
+- Status does not start stopped containers, run lifecycle hooks, apply copy rules, or change worktree files. Start the container first when needed.
+- Status works for any image whose configured workdir is a Git repository; branch checkout itself only works with the `discourse` image kind.
+- The word `status` is reserved as the subcommand. To check out a branch literally named `status`, terminate option parsing explicitly: `dv branch -- status`.
 - Checks out the specified branch and pulls latest changes.
 - Performs a full database reset and migration (development and test databases).
 - Reinstalls dependencies (bundle and pnpm).
@@ -484,6 +510,14 @@ dv branch feature/my-feature
 
 # Create a new local branch for development
 dv branch --new my-new-feature
+
+# Show the container's current branch and uncommitted changes
+dv branch status
+Container: my-agent
+Branch:    feature/my-feature
+Changes:
+ M app/models/example.rb
+?? notes.txt
 
 # Quickly switch branches without resetting DB
 dv branch --no-reset main

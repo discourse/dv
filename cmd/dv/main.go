@@ -3,6 +3,7 @@ package main
 import (
 	"dv/internal/cli"
 	"log"
+	"os"
 )
 
 var (
@@ -13,6 +14,9 @@ var (
 
 func main() {
 	if err := cli.Execute(); err != nil {
+		if cli.IsSilentError(err) {
+			os.Exit(1)
+		}
 		log.Fatal(err)
 	}
 }

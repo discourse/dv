@@ -73,6 +73,14 @@ go install golang.org/x/tools/cmd/goimports@latest
 3. Use `internal/config` for persistent settings
 4. Use `internal/docker` helpers for container operations
 
+Commands with Cobra positional `Args` validation automatically show their help on stderr and exit non-zero when required arguments are entirely absent. Keep validation declarative (`cobra.ExactArgs`, `cobra.MinimumNArgs`, and similar) when possible so this behavior remains consistent.
+
+Choose container helpers according to command semantics:
+
+- `prepareContainerExecContext` is for execution commands such as `enter` and `run`; it may start the container, run `postStart` hooks, and apply `copyRules`.
+- `resolveContainerTarget` is configuration-only and is appropriate for inspection commands; callers must explicitly decide whether a missing or stopped container is an error and must opt into any lifecycle or copy behavior.
+- Discourse-specific commands should validate the image kind and use the image's canonical workdir when they need the Rails application root. General workspace commands should use the effective per-container workdir.
+
 ## CLI Quick Reference
 
 Core commands for development/testing:

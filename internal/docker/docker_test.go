@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -445,6 +447,28 @@ func TestEnsureMountHostPathsLeavesExistingFileAlone(t *testing.T) {
 	contents, _ := os.ReadFile(file)
 	if string(contents) != "data" {
 		t.Errorf("file contents changed: got %q", contents)
+	}
+}
+
+func TestExecOutputWithStderrSeparatesStreams(t *testing.T) {
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := "#!/bin/sh\nprintf 'stdout-value'\nprintf 'stderr-value' >&2\nexit 7\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := ExecOutputWithStderr("agent", "/workspace", nil, []string{"git", "status"})
+	if stdout != "stdout-value" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "stderr-value" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+		t.Fatalf("expected exit code 7, got %v", err)
 	}
 }
 

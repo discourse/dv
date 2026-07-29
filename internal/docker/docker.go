@@ -583,6 +583,24 @@ func ExecOutputContext(ctx context.Context, name, workdir string, envs Envs, arg
 	return string(out), err
 }
 
+// ExecOutputWithStderr runs a command inside the container as the discourse
+// user and keeps stdout and stderr separate. Use this when stdout is parsed as
+// data but stderr is needed for failure diagnostics.
+func ExecOutputWithStderr(name, workdir string, envs Envs, argv []string) (string, string, error) {
+	args := []string{"exec", "--user", "discourse", "-w", workdir}
+	for _, e := range envs {
+		args = append(args, "-e", e)
+	}
+	args = append(args, name)
+	args = append(args, argv...)
+	cmd := exec.Command("docker", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
 // ExecCombinedOutput runs a command inside the container as the discourse user.
 // Use nil for envs when no environment variables are needed.
 // Returns both stdout and stderr combined.
