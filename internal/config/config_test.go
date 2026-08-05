@@ -645,6 +645,80 @@ func TestSave_DefaultTemplateIncludedWhenSet(t *testing.T) {
 	}
 }
 
+func TestDefaultIncludesAgyAuthCopyRule(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	for _, rule := range agyCopyRules() {
+		if !containsCopyRule(cfg.CopyRules, rule.Host, rule.Container) {
+			t.Fatalf("expected default copy rule %s -> %s", rule.Host, rule.Container)
+		}
+		if len(rule.Agents) != 1 || rule.Agents[0] != "agy" {
+			t.Fatalf("expected agy-scoped copy rule, got %#v", rule.Agents)
+		}
+	}
+}
+
+func TestLoadOrCreateAppendsMissingAgyCopyRulesForVersionOneConfig(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := Default()
+	cfg.CopyRulesDefaultsVersion = 1
+	cfg.CopyRules = []CopyRule{{
+		Host:      "~/custom/auth.json",
+		Container: "/home/discourse/custom/auth.json",
+	}}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if loaded.CopyRulesDefaultsVersion != currentCopyRulesDefaultsVersion {
+		t.Fatalf("expected copy rules defaults version %d, got %d", currentCopyRulesDefaultsVersion, loaded.CopyRulesDefaultsVersion)
+	}
+	if !containsCopyRule(loaded.CopyRules, "~/custom/auth.json", "/home/discourse/custom/auth.json") {
+		t.Fatal("expected custom copy rule to be preserved")
+	}
+	for _, rule := range agyCopyRules() {
+		if !containsCopyRule(loaded.CopyRules, rule.Host, rule.Container) {
+			t.Fatalf("expected migrated agy copy rule %s -> %s", rule.Host, rule.Container)
+		}
+	}
+}
+
+func TestLoadOrCreateDoesNotReaddRemovedAgyCopyRulesAfterMigration(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := Default()
+	cfg.CopyRulesDefaultsVersion = currentCopyRulesDefaultsVersion
+	cfg.CopyRules = []CopyRule{{
+		Host:      "~/custom/auth.json",
+		Container: "/home/discourse/custom/auth.json",
+	}}
+
+	if err := Save(tmpDir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadOrCreate(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	for _, rule := range agyCopyRules() {
+		if containsCopyRule(loaded.CopyRules, rule.Host, rule.Container) {
+			t.Fatalf("did not expect agy copy rule to be re-added after migration: %s -> %s", rule.Host, rule.Container)
+		}
+	}
+}
+
 func TestDefaultIncludesGrokEnvAndCopyRules(t *testing.T) {
 	t.Parallel()
 

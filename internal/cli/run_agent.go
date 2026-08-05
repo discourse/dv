@@ -412,6 +412,12 @@ var agentRules = map[string]agentRule{
 		defaults:    []string{"--yolo"},
 		env:         []string{"XAI_API_KEY"},
 	},
+	"agy": {
+		interactive: func() []string { return []string{"agy"} },
+		withPrompt:  func(p string) []string { return []string{"agy", "-p", p} },
+		defaults:    []string{"--dangerously-skip-permissions"},
+		aliases:     []string{"antigravity"},
+	},
 	"term-llm": {
 		interactive:   func() []string { return []string{"term-llm"} },
 		withPrompt:    func(p string) []string { return []string{"term-llm", "ask", "@developer", "--yolo", p} },

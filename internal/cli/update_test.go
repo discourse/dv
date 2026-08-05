@@ -35,6 +35,19 @@ func TestResolveAgentUpdateStepsSupportsAlias(t *testing.T) {
 	}
 }
 
+func TestResolveAgentUpdateStepsSupportsAntigravityAlias(t *testing.T) {
+	steps, name, err := resolveAgentUpdateSteps(config.Config{}, "antigravity")
+	if err != nil {
+		t.Fatalf("resolveAgentUpdateSteps() error = %v", err)
+	}
+	if name != "agy" {
+		t.Fatalf("name = %q, want agy", name)
+	}
+	if len(steps) != 1 || steps[0].name != "agy" {
+		t.Fatalf("steps = %#v, want only agy", steps)
+	}
+}
+
 func TestResolveAgentUpdateStepsEmptyReturnsAllAgents(t *testing.T) {
 	steps, name, err := resolveAgentUpdateSteps(config.Config{}, "")
 	if err != nil {

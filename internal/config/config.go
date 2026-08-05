@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const currentCopyRulesDefaultsVersion = 1
+const currentCopyRulesDefaultsVersion = 2
 
 type Config struct {
 	ImageTag         string            `json:"imageTag"`
@@ -431,7 +431,8 @@ func DefaultCopyRules() []CopyRule {
 			SkipIfPresent: true,
 		},
 	}
-	return append(rules, grokCopyRules()...)
+	rules = append(rules, grokCopyRules()...)
+	return append(rules, agyCopyRules()...)
 }
 
 func (cfg *Config) migrateCopyFiles() {
@@ -468,8 +469,22 @@ func (cfg *Config) migrateCopyRuleDefaults() {
 		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, grokCopyRules())
 		cfg.CopyRulesDefaultsVersion = 1
 	}
+	if cfg.CopyRulesDefaultsVersion < 2 {
+		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, agyCopyRules())
+		cfg.CopyRulesDefaultsVersion = 2
+	}
 	if cfg.CopyRulesDefaultsVersion < currentCopyRulesDefaultsVersion {
 		cfg.CopyRulesDefaultsVersion = currentCopyRulesDefaultsVersion
+	}
+}
+
+func agyCopyRules() []CopyRule {
+	return []CopyRule{
+		{
+			Host:      "~/.gemini/antigravity-cli/antigravity-oauth-token",
+			Container: "/home/discourse/.gemini/antigravity-cli/antigravity-oauth-token",
+			Agents:    []string{"agy"},
+		},
 	}
 }
 

@@ -8,7 +8,7 @@ This project provides a containerized development environment that includes:
 - Discourse development setup
 - Essential developer tools (vim, ripgrep)
 - Ready-to-use database configuration, fully migrated dev/test databases
-- Various AI helpers preinstalled in the image (Codex, OpenCode, Copilot, Claude, Cursor, Droid, Vibe, Term-LLM)
+- Various AI helpers preinstalled in the image (Codex, OpenCode, Copilot, Claude, Cursor, Droid, Vibe, Grok, Google Antigravity, Term-LLM)
 - Multi-agent container management via `dv` top-level commands (`list`, `new`, `select`, `rename`)
 - Plugin bootstrap helpers via `dv new --plugin` and `dv plugin add`
 - Embedded Dockerfile managed by the CLI with safe override mechanisms
@@ -262,7 +262,8 @@ BYO agents can be configured in `~/.config/dv/config.json`:
 Then run `dv ra my-agent Fix the bug` or `dv ra ma`. If `install`/`update` is configured, `dv update agent my-agent` runs `update` (falling back to `install` when `update` is omitted), and `dv update agents` includes it.
 
 Notes:
-- Autocompletes bundled agents plus configured BYO agents and aliases: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `droid`, `vibe`, `term-llm` (`tl`).
+- Autocompletes bundled agents plus configured BYO agents and aliases: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `droid`, `vibe`, `grok`, `agy` (`antigravity`), `term-llm` (`tl`).
+- Running `agy` automatically copies the host's `~/.gemini/antigravity-cli/antigravity-oauth-token` into the container when present, so an existing Google Antigravity login can be reused.
 - If no prompt is provided, an inline TUI opens for multi-line input (Ctrl+D to run, Esc to cancel).
 - You can pass a regular file path as the first argument after the agent (e.g. `dv ra codex ./plan.md`). The file will be read on the host and its contents used as the prompt. If the argument is not a file, the existing prompt behavior is used.
 - Filename/path completion is supported when you start typing a path (e.g. `./`, `../`, `/`, or include a path separator).
@@ -309,7 +310,7 @@ dv update agent codex --name my-container
 Notes:
 - Starts the container if needed before running updates.
 - Re-runs the official install scripts or package managers to pull the latest versions.
-- Supported single-agent names include `codex`, `copilot`, `opencode`, `claude`, `cursor`, `droid`, `vibe`, `term-llm`, and configured BYO agents with an `update` or `install` command.
+- Supported single-agent names include `codex`, `copilot`, `opencode`, `claude`, `cursor`, `droid`, `vibe`, `agy` (`antigravity`), `term-llm`, and configured BYO agents with an `update` or `install` command.
 
 ### dv remove
 Remove the container and optionally the image.

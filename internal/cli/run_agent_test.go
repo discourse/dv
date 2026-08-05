@@ -54,6 +54,26 @@ func TestBuildAgentInteractiveGrokUsesYolo(t *testing.T) {
 	}
 }
 
+func TestBuildAgentArgsAgyUsesPrintAndSkipsPermissions(t *testing.T) {
+	args := buildAgentArgs("agy", "hello")
+	want := []string{"agy", "--dangerously-skip-permissions", "-p", "hello"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestBuildAgentInteractiveAgyAliasSkipsPermissions(t *testing.T) {
+	agent := resolveAgentAlias("antigravity")
+	if agent != "agy" {
+		t.Fatalf("agent = %q, want agy", agent)
+	}
+	args := buildAgentInteractive(agent)
+	want := []string{"agy", "--dangerously-skip-permissions"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
 func TestBuildAgentArgsTermLLMPutsDeveloperAndYoloAfterAsk(t *testing.T) {
 	args := buildAgentArgs("term-llm", "hello")
 	want := []string{"term-llm", "ask", "@developer", "--yolo", "hello"}
