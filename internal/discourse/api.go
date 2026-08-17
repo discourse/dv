@@ -162,67 +162,19 @@ func (c *Client) generateKey() error {
 		return fmt.Errorf("container %s not running - run 'dv start' first", c.ContainerName)
 	}
 
-	c.verboseLog("Generating new API key via Rails...")
-
-	// Ruby script to create or find existing API key
-	// Uses DV_API_KEY: and DV_USERNAME: markers to be robust against warnings/noise in stdout
-	rubyScript := fmt.Sprintf(`
-require "json"
-ActiveRecord::Base.logger = nil
-Rails.logger.level = 4
-
-desc = %q
-admin = User.find_by(id: -1) || User.where(admin: true).order(:id).first
-raise "No admin user found. Seed the database first." if admin.nil?
-
-# Revoke any existing keys with this description
-ApiKey.where(description: desc).update_all(revoked_at: Time.current)
-
-# Create new key
-key = ApiKey.create!(
-  user: admin,
-  description: desc,
-  created_by_id: admin.id
-)
-
-STDOUT.sync = true
-puts "DV_API_KEY:#{key.key}"
-puts "DV_USERNAME:#{admin.username}"
-`, APIKeyDescription)
-
-	cmd := fmt.Sprintf("cd %s && RAILS_ENV=development bundle exec rails runner - <<'RUBY'\n%s\nRUBY",
-		shellQuote(c.Workdir), rubyScript)
-
-	out, err := docker.ExecCombinedOutput(c.ContainerName, c.Workdir, c.Envs, []string{"bash", "-lc", cmd})
-	c.verboseLog("Rails runner output (%d bytes, markers: key=%t, user=%t)", len(out), strings.Contains(out, "DV_API_KEY:"), strings.Contains(out, "DV_USERNAME:"))
+	generated, err := GenerateAPIKey(GenerateAPIKeyOptions{
+		ContainerName: c.ContainerName,
+		Workdir:       c.Workdir,
+		Description:   APIKeyDescription,
+		Envs:          c.Envs,
+		Verbose:       c.Verbose,
+	})
 	if err != nil {
-		return fmt.Errorf("rails runner failed: %w\nOutput: %s", err, out)
+		return err
 	}
 
-	// Parse output looking for DV_API_KEY: and DV_USERNAME: markers
-	// This is robust against warnings/noise that plugins may emit during Rails init
-	var keyLine, userLine string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "DV_API_KEY:") {
-			keyLine = strings.TrimPrefix(line, "DV_API_KEY:")
-		} else if strings.HasPrefix(line, "DV_USERNAME:") {
-			userLine = strings.TrimPrefix(line, "DV_USERNAME:")
-		}
-	}
-
-	if keyLine == "" || userLine == "" {
-		return fmt.Errorf("missing DV_API_KEY or DV_USERNAME markers in output (stderr/warnings may have caused issues): %q", out)
-	}
-
-	// Validate key format (should be hex, 32-64 chars)
-	keyRe := regexp.MustCompile(`^[0-9a-f]{32,64}$`)
-	if !keyRe.MatchString(keyLine) {
-		return fmt.Errorf("invalid API key format: %q", keyLine)
-	}
-
-	c.APIKey = keyLine
-	c.APIUsername = userLine
+	c.APIKey = generated.Key
+	c.APIUsername = generated.Username
 
 	// Save to container file
 	if err := c.saveKeyToContainer(); err != nil {
