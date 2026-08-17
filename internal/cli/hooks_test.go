@@ -13,6 +13,15 @@ import (
 	"dv/internal/config"
 )
 
+func TestHostHookEnvExcludesShellActionDirectory(t *testing.T) {
+	t.Setenv(shellActionDirEnv, t.TempDir())
+	for _, entry := range hostHookEnv(hostHookContext{}, 0) {
+		if strings.HasPrefix(entry, shellActionDirEnv+"=") {
+			t.Fatalf("host hook inherited %s", shellActionDirEnv)
+		}
+	}
+}
+
 func TestRunConfiguredHostHooksPassesEnvironment(t *testing.T) {
 	t.Setenv("DV_NO_HOOKS", "")
 	t.Setenv("DV_VERBOSE", "")

@@ -183,9 +183,12 @@ func extractWorkspaceRepo(opts workspaceExtractOptions) error {
 	if err != nil {
 		return err
 	}
+	if !opts.syncMode && !opts.chdir && !opts.echoCd {
+		requestShellChdir(opts.localRepo)
+	}
 
 	if opts.echoCd {
-		fmt.Fprintf(opts.cmd.OutOrStdout(), "cd %s\n", opts.localRepo)
+		fmt.Fprintf(opts.cmd.OutOrStdout(), "cd -- %s\n", quotePOSIXShell(opts.localRepo))
 		return nil
 	}
 
@@ -219,6 +222,7 @@ func extractWorkspaceRepo(opts workspaceExtractOptions) error {
 			shell = "/bin/bash"
 		}
 		s := exec.Command(shell)
+		s.Env = environmentWithout(os.Environ(), shellActionDirEnv)
 		s.Dir = opts.localRepo
 		s.Stdin = os.Stdin
 		s.Stdout = os.Stdout
@@ -240,9 +244,12 @@ func copyWorkspaceDirectory(opts workspaceExtractOptions, logOut io.Writer, reas
 	if err := docker.CopyFromContainer(opts.containerName, containerCopyAllSource(opts.containerWorkdir), opts.localRepo); err != nil {
 		return err
 	}
+	if !opts.syncMode && !opts.chdir && !opts.echoCd {
+		requestShellChdir(opts.localRepo)
+	}
 
 	if opts.echoCd {
-		fmt.Fprintf(opts.cmd.OutOrStdout(), "cd %s\n", opts.localRepo)
+		fmt.Fprintf(opts.cmd.OutOrStdout(), "cd -- %s\n", quotePOSIXShell(opts.localRepo))
 		return nil
 	}
 
@@ -272,6 +279,7 @@ func copyWorkspaceDirectory(opts workspaceExtractOptions, logOut io.Writer, reas
 			shell = "/bin/bash"
 		}
 		s := exec.Command(shell)
+		s.Env = environmentWithout(os.Environ(), shellActionDirEnv)
 		s.Dir = opts.localRepo
 		s.Stdin = os.Stdin
 		s.Stdout = os.Stdout

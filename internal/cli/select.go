@@ -43,6 +43,7 @@ var selectCmd = &cobra.Command{
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "Selected agent: %s\n", name)
+		requestShellAgent(name)
 		return nil
 	},
 }

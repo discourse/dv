@@ -323,10 +323,13 @@ Use 'dv extract plugin <name>' or 'dv extract theme <name>' for tab completion.`
 		if err != nil {
 			return err
 		}
+		if !syncMode && !chdir && !echoCd {
+			requestShellChdir(localRepo)
+		}
 
 		// If only the cd command is requested, print it cleanly and exit
 		if echoCd {
-			fmt.Fprintf(cmd.OutOrStdout(), "cd %s\n", localRepo)
+			fmt.Fprintf(cmd.OutOrStdout(), "cd -- %s\n", quotePOSIXShell(localRepo))
 			return nil
 		}
 
@@ -361,6 +364,7 @@ Use 'dv extract plugin <name>' or 'dv extract theme <name>' for tab completion.`
 				shell = "/bin/bash"
 			}
 			s := exec.Command(shell)
+			s.Env = environmentWithout(os.Environ(), shellActionDirEnv)
 			s.Dir = localRepo
 			s.Stdin = os.Stdin
 			s.Stdout = os.Stdout

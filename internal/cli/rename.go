@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,11 @@ import (
 	"dv/internal/localproxy"
 	"dv/internal/session"
 	"dv/internal/xdg"
+)
+
+var (
+	renameDockerExists        = docker.Exists
+	renameDockerRenameContext = docker.RenameContext
 )
 
 var renameCmd = &cobra.Command{
@@ -47,10 +53,12 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 	if err != nil {
 		return err
 	}
-	if !docker.Exists(oldName) {
+	renamingEnvSelection := os.Getenv("DV_AGENT") == oldName
+	renamingSessionAgent := session.GetCurrentAgent() == oldName
+	if !renameDockerExists(oldName) {
 		return fmt.Errorf("agent '%s' does not exist", oldName)
 	}
-	if docker.Exists(newName) {
+	if renameDockerExists(newName) {
 		return fmt.Errorf("an agent named '%s' already exists", newName)
 	}
 	var proxyHost string
@@ -65,10 +73,10 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 	}
 	// Rename is intentionally allowed to finish once dispatched; interrupting the
 	// Docker CLI after the daemon accepts the rename can desynchronize config.
-	if err := docker.RenameContext(context.WithoutCancel(operationCtx), oldName, newName, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+	if err := renameDockerRenameContext(context.WithoutCancel(operationCtx), oldName, newName, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 		return err
 	}
-	if session.GetCurrentAgent() == oldName {
+	if renamingSessionAgent {
 		_ = session.SetCurrentAgent(newName)
 	}
 	var newHost string
@@ -78,6 +86,9 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 	if err := config.Update(configDir, func(latest *config.Config) error {
 		if latest.SelectedAgent == oldName {
 			latest.SelectedAgent = newName
+		}
+		if latest.DefaultContainer == oldName {
+			latest.DefaultContainer = newName
 		}
 		if latest.ContainerImages != nil {
 			if img, ok := latest.ContainerImages[oldName]; ok {
@@ -112,6 +123,9 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Renamed agent '%s' -> '%s'\n", oldName, newName)
+	if renamingEnvSelection {
+		requestShellAgent(newName)
+	}
 
 	if proxyHost != "" {
 		if docker.Running(newName) {

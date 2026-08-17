@@ -296,6 +296,7 @@ func selectAgentDirect(name string) (string, error) {
 	}); err != nil {
 		return "", err
 	}
+	requestShellAgent(name)
 	return fmt.Sprintf("Selected agent: %s\n", name), nil
 }
 

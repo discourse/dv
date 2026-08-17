@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"dv/internal/config"
+	"dv/internal/session"
 	"dv/internal/xdg"
 )
 
@@ -105,6 +106,66 @@ func TestRemoveDockerFailurePreservesConfigAndSkipsPostRemove(t *testing.T) {
 	}
 	if _, ok := cfg.CustomWorkdirs["agent-one"]; !ok {
 		t.Fatal("CustomWorkdirs[agent-one] was removed after Docker failure")
+	}
+}
+
+func TestRemoveEffectiveEnvSelectionFallsBackWithoutChangingSession(t *testing.T) {
+	setupRemoveTestConfig(t, func(cfg *config.Config, _ string) {
+		cfg.SelectedAgent = "global-agent"
+	})
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("DV_AGENT", "agent-one")
+	actionDir := t.TempDir()
+	t.Setenv(shellActionDirEnv, actionDir)
+	if err := session.SetCurrentAgent("session-agent"); err != nil {
+		t.Fatalf("set session agent: %v", err)
+	}
+
+	restore := stubRemoveDocker(t)
+	defer restore()
+	removeDockerExists = func(name string) bool { return false }
+
+	cmd, stdout, _ := removeTestCommand()
+	if err := removeCmd.RunE(cmd, []string{"agent-one"}); err != nil {
+		t.Fatalf("remove RunE returned error: %v", err)
+	}
+	if got := session.GetCurrentAgent(); got != "session-agent" {
+		t.Fatalf("session selection = %q, want session-agent", got)
+	}
+	assertShellActionFile(t, filepath.Join(actionDir, shellActionAgentUnset), "")
+	if _, err := os.Stat(filepath.Join(actionDir, shellActionAgent)); !os.IsNotExist(err) {
+		t.Fatalf("agent action should be absent after unsetting override: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Selected agent: session-agent") {
+		t.Fatalf("stdout = %q, want session fallback selection", stdout.String())
+	}
+}
+
+func TestRemoveClearsRemovedDefaultContainer(t *testing.T) {
+	configDir := setupRemoveTestConfig(t, func(cfg *config.Config, _ string) {
+		cfg.SelectedAgent = ""
+		cfg.DefaultContainer = "agent-one"
+		cfg.SelectedImage = "missing-image"
+		delete(cfg.ContainerImages, "agent-one")
+	})
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("DV_AGENT", "")
+	t.Setenv(shellActionDirEnv, t.TempDir())
+
+	restore := stubRemoveDocker(t)
+	defer restore()
+	removeDockerExists = func(name string) bool { return false }
+
+	cmd, _, _ := removeTestCommand()
+	if err := removeCmd.RunE(cmd, []string{"agent-one"}); err != nil {
+		t.Fatalf("remove RunE returned error: %v", err)
+	}
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if cfg.DefaultContainer != "" {
+		t.Fatalf("default container = %q, want empty", cfg.DefaultContainer)
 	}
 }
 

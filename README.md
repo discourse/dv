@@ -538,6 +538,7 @@ Notes:
 - If the plugin is a git repo with a remote, dv clones it and checks out a branch/commit matching the container; only modified/untracked files are copied over.
 - If the plugin has no git remote or isn’t a git repo, dv copies the whole directory to `<PLUGIN>_src`.
 - `--chdir` opens a subshell in the extracted directory on completion. `--echo-cd` prints a `cd <path>` line to stdout (suitable for `eval`).
+- With `dv config shell-init` enabled, a successful non-sync extraction automatically changes the current shell to the extracted directory; neither flag is needed.
 
 Examples:
 ```bash
@@ -567,6 +568,7 @@ Notes:
 - Destination is `${XDG_DATA_HOME}/dv/<THEME>_src`.
 - `--sync` enables continuous bidirectional synchronization (press Ctrl+C to stop).
 - `--chdir` opens a subshell in the extracted directory on completion. `--echo-cd` prints a `cd <path>` line to stdout (suitable for `eval`).
+- With `dv config shell-init` enabled, a successful non-sync extraction automatically changes the current shell to the extracted directory; neither flag is needed.
 
 Examples:
 ```bash
@@ -716,12 +718,109 @@ data: {"exit_code":0}
 Explicit names must be Rails hostname-safe because API requests cannot respond to
 the interactive confirmation used by the CLI for unsafe names.
 
-### dv config completion
-Generate shell completion scripts (rarely needed). For zsh:
+### dv config shell-init
+
+Enable shell integration for completions, terminal-local selection, and extraction
+navigation.
+
+For zsh, the recommended setup is:
 
 ```bash
-dv config completion zsh           # print to stdout
-dv config completion zsh --install # install to ~/.local/share/zsh/site-functions/_dv
+dv config shell-init zsh --install
+```
+
+This atomically installs the generated integration to
+`${XDG_DATA_HOME:-$HOME/.local/share}/dv/shell-init.zsh` and adds one line to
+`~/.zshrc` (or `$ZDOTDIR/.zshrc`):
+
+```zsh
+source "${XDG_DATA_HOME:-$HOME/.local/share}/dv/shell-init.zsh"
+```
+
+Sourcing the installed file avoids starting `dv` whenever a shell opens. The
+installer is idempotent and also replaces the previously documented dynamic
+`eval` line. Rerun the install command after upgrading `dv` to refresh the
+cached integration. If you move the source line manually, place it after any
+shell framework that initializes Zsh completion.
+
+To generate integration on every shell start instead, or for bash and fish, use:
+
+```zsh
+# zsh
+eval "$(command dv config shell-init zsh)"
+```
+
+```bash
+# bash
+eval "$(command dv config shell-init bash)"
+```
+
+```fish
+# fish
+command dv config shell-init fish | source
+```
+
+Shell integration provides:
+
+- Dynamic command, flag, and argument completions.
+- Terminal-local agent selection through `DV_AGENT`. Successful `dv select`,
+  `dv new`, and selected-agent rename/remove operations update the current
+  shell automatically. Subshells and commands launched from that terminal
+  inherit the same selection.
+- Automatic `cd` into the host repository after a successful `dv extract`,
+  `dv extract plugin`, or `dv extract theme`. Sync mode does not change the
+  current directory, and explicit `--chdir` or `--echo-cd` behavior takes
+  precedence over the automatic shell action.
+
+The generated wrapper exchanges data with `dv` through a private temporary
+directory; it does not evaluate command output. The integration defines a `dv`
+shell function, replacing any earlier `dv` alias or function. To run custom
+behavior after a wrapped command, define
+`dv_shell_post_command`; it receives the dv exit status followed by the original
+arguments. For example:
+
+```zsh
+dv_shell_post_command() {
+  local dv_status=$1
+  shift
+  if (( dv_status == 0 )) && [[ "${1-}" == "select" && -n "${2-}" ]]; then
+    command hyprctl dispatch 'hl.dsp.window.tag({ tag = "+dv", window = "active" })'
+  fi
+}
+```
+
+The hook's status does not replace the original dv status. To bypass all shell
+behavior for a single invocation, call the executable with `command`, for
+example:
+
+```bash
+command dv extract
+```
+
+If `DV_AGENT` is already set when shell integration loads, its value is
+preserved. Dynamically generated integration initializes an unset value from
+dv's effective selected agent. The installed zsh integration does not bake in
+the agent selected at installation time; until a command updates `DV_AGENT`, dv
+continues to resolve the persisted selection normally.
+
+### dv config completion
+
+Generate or install static shell completion scripts. Static installation is an
+alternative for users who do not want the dynamic shell integration.
+
+For zsh:
+
+```bash
+dv config completion zsh             # print to stdout
+dv config completion zsh --install   # install the script only
+dv config completion zsh-install     # install and update ~/.zshrc
+```
+
+For bash:
+
+```bash
+dv config completion bash           # print to stdout
+dv config completion bash --install # install under the user data directory
 ```
 
 ### dv upgrade

@@ -324,6 +324,7 @@ var newCmd = &cobra.Command{
 		}
 
 		provisioningComplete = true
+		requestShellAgent(name)
 		if sshForwardMode == sshForwardProvisioning {
 			if err = sealProvisionedContainer(cmd, cfg, name, workdir, imageTag, imgName, lifecycle, templateEnvs, templateMounts); err != nil {
 				return fmt.Errorf("agent was provisioned but SSH forwarding could not be removed safely: %w", err)

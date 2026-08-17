@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -73,6 +74,9 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 	if name == "" {
 		name = currentAgentName(cfg)
 	}
+	removingEffectiveSelection := currentAgentName(cfg) == name
+	removingEnvSelection := os.Getenv("DV_AGENT") == name
+	removingSessionSelection := session.GetCurrentAgent() == name
 	imgForContainer := cfg.ContainerImages[name]
 	var proxyHost string
 	if cfg.LocalProxy.Enabled {
@@ -168,20 +172,42 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 			replacementSelected = true
 			latest.SelectedAgent = replacement
 		}
+		if latest.DefaultContainer == name {
+			latest.DefaultContainer = replacement
+		}
 		cfg = *latest
 		return nil
 	}); err != nil {
 		return err
 	}
-	if replacementSelected {
-		if session.GetCurrentAgent() == name {
-			_ = session.SetCurrentAgent(replacement)
+	fallbackSelection := cfg.SelectedAgent
+	if fallbackSelection == "" {
+		fallbackSelection = cfg.DefaultContainer
+	}
+	if fallbackSelection == name {
+		fallbackSelection = replacement
+	}
+	if removingSessionSelection {
+		_ = session.SetCurrentAgent(fallbackSelection)
+	}
+	effectiveFallback := fallbackSelection
+	if removingEnvSelection {
+		if sessionSelection := session.GetCurrentAgent(); sessionSelection != "" {
+			effectiveFallback = sessionSelection
 		}
-		if replacement != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "Selected agent: %s\n", replacement)
+	}
+	selectionAffected := replacementSelected || removingEffectiveSelection
+	if selectionAffected {
+		if effectiveFallback != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Selected agent: %s\n", effectiveFallback)
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), "Selected agent: (none)")
 		}
+	}
+	if removingEffectiveSelection {
+		// Drop the shell override so normal session -> global -> default
+		// precedence determines the next effective selection.
+		requestShellAgent("")
 	}
 
 	if proxyHost != "" && localproxy.Running(cfg.LocalProxy) {

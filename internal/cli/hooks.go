@@ -237,7 +237,7 @@ func hostHookEnv(ctx hostHookContext, index int) []string {
 	}
 
 	env := make([]string, 0, len(os.Environ())+len(values))
-	for _, entry := range os.Environ() {
+	for _, entry := range environmentWithout(os.Environ(), shellActionDirEnv) {
 		key, _, ok := strings.Cut(entry, "=")
 		if !ok {
 			env = append(env, entry)
