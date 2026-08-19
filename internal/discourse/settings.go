@@ -119,20 +119,6 @@ func (c *Client) GetSiteSettingString(name string) (string, error) {
 	}
 }
 
-func isEmptySiteSetting(val interface{}) bool {
-	switch v := val.(type) {
-	case nil:
-		return true
-	case string:
-		s := strings.TrimSpace(v)
-		return s == "" || s == "null" || s == "[]"
-	case []interface{}:
-		return len(v) == 0
-	default:
-		return false
-	}
-}
-
 func parseInt64ListSetting(val interface{}) []int64 {
 	var ids []int64
 	seen := map[int64]struct{}{}
@@ -205,17 +191,32 @@ func formatInt64ListSetting(ids []int64) string {
 	return strings.Join(parts, "|")
 }
 
-func (c *Client) EnsureAIBotDebuggingAllowedGroupsDefault() error {
+const (
+	discourseStaffGroupID       int64 = 3
+	discourseTrustLevel0GroupID int64 = 10
+)
+
+// EnsureAIBotDebuggingAllowedGroups ensures the staff group can access AI bot
+// debugging. When the setting is empty, it preserves dv's existing behavior of
+// also allowing trust-level-0 users.
+func (c *Client) EnsureAIBotDebuggingAllowedGroups() error {
 	val, err := c.GetSiteSetting("ai_bot_debugging_allowed_groups")
 	if err != nil {
 		return err
 	}
 
-	if !isEmptySiteSetting(val) {
-		return nil
+	ids := parseInt64ListSetting(val)
+	if len(ids) == 0 {
+		ids = append(ids, discourseTrustLevel0GroupID)
+	}
+	for _, id := range ids {
+		if id == discourseStaffGroupID {
+			return nil
+		}
 	}
 
-	return c.SetSiteSetting("ai_bot_debugging_allowed_groups", "trust_level_0")
+	ids = append(ids, discourseStaffGroupID)
+	return c.SetSiteSetting("ai_bot_debugging_allowed_groups", formatInt64ListSetting(ids))
 }
 
 func (c *Client) AppendAIBotEnabledLLM(id int64) error {

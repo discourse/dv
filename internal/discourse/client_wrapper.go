@@ -85,8 +85,8 @@ func (c *ClientWrapper) EnableFeatures(ctx context.Context, settings []string, e
 	if ghToken, ok := env["GH_TOKEN"]; ok && ghToken != "" {
 		c.Client.SetSiteSetting("ai_bot_github_access_token", ghToken)
 	}
-	// Default debugging groups to trust_level_0 if unset.
-	if err := c.Client.EnsureAIBotDebuggingAllowedGroupsDefault(); err != nil {
+	// Ensure staff can access AI bot debugging while preserving existing groups.
+	if err := c.Client.EnsureAIBotDebuggingAllowedGroups(); err != nil {
 		c.Client.verboseLog("Warning: failed to ensure ai_bot_debugging_allowed_groups: %v", err)
 	}
 	return nil
