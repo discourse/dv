@@ -199,7 +199,7 @@ var agentUpdateSteps = []agentUpdateStep{
 	{name: "cursor", aliases: []string{"cursor-agent"}, label: "Cursor Agent", command: "curl -fsS https://cursor.com/install | bash", useUserPaths: true},
 	{name: "droid", aliases: []string{"factory", "factory-droid"}, label: "Factory Droid", command: "curl -fsSL https://app.factory.ai/cli | sh", useUserPaths: true},
 	{name: "vibe", aliases: []string{"mistral", "mistral-vibe"}, label: "Mistral Vibe", command: "curl -LsSf https://mistral.ai/vibe/install.sh | bash", useUserPaths: true},
-	{name: "agy", aliases: []string{"antigravity"}, label: "Google Antigravity CLI", command: "curl -fsSL https://antigravity.google/cli/install.sh | bash", useUserPaths: true},
+	{name: "agy", aliases: []string{"antigravity"}, label: "Google Antigravity CLI", command: "if command -v agy >/dev/null; then agy update; else curl -fsSL https://antigravity.google/cli/install.sh | bash; fi", useUserPaths: true},
 	{name: "term-llm", aliases: []string{"tl"}, label: "Term-LLM", command: "command -v term-llm >/dev/null && term-llm upgrade || echo 'term-llm not installed, skipping'", useUserPaths: true},
 }
 

@@ -46,6 +46,10 @@ func TestResolveAgentUpdateStepsSupportsAntigravityAlias(t *testing.T) {
 	if len(steps) != 1 || steps[0].name != "agy" {
 		t.Fatalf("steps = %#v, want only agy", steps)
 	}
+	want := "if command -v agy >/dev/null; then agy update; else curl -fsSL https://antigravity.google/cli/install.sh | bash; fi"
+	if steps[0].command != want {
+		t.Fatalf("command = %q, want %q", steps[0].command, want)
+	}
 }
 
 func TestResolveAgentUpdateStepsEmptyReturnsAllAgents(t *testing.T) {
