@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -9,9 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"dv/internal/config"
 	"dv/internal/docker"
-	"dv/internal/xdg"
 )
 
 var mailCmd = &cobra.Command{
@@ -21,129 +21,124 @@ var mailCmd = &cobra.Command{
 This allows you to access MailHog from your browser without reconfiguring Docker.
 Press Ctrl+C to stop both MailHog and the tunnel.`,
 	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		verbose, _ := cmd.Flags().GetBool("verbose")
-		log := func(format string, a ...any) {
-			if verbose {
-				fmt.Fprintf(cmd.OutOrStdout(), "[debug] "+format+"\n", a...)
-			}
+	RunE: runMailCommand,
+}
+
+func runMailCommand(cmd *cobra.Command, _ []string) error {
+	verbose, _ := cmd.Flags().GetBool("verbose")
+	log := func(format string, a ...any) {
+		if verbose {
+			fmt.Fprintf(cmd.OutOrStdout(), "[debug] "+format+"\n", a...)
 		}
+	}
 
-		configDir, err := xdg.ConfigDir()
-		if err != nil {
-			return err
+	target, err := resolveContainerTarget(cmd)
+	if err != nil {
+		return err
+	}
+	name := target.name
+	log("Using container: %s", name)
+	if !docker.Exists(name) {
+		return fmt.Errorf("container '%s' does not exist; create it with 'dv start'", name)
+	}
+	if !docker.Running(name) {
+		return fmt.Errorf("container '%s' is not running; start it with 'dv start'", name)
+	}
+
+	containerPort, _ := cmd.Flags().GetInt("port")
+	if containerPort == 0 {
+		containerPort = 8025
+	}
+	if err := validateTCPPort(containerPort, "container port"); err != nil {
+		return err
+	}
+	hostPort, _ := cmd.Flags().GetInt("host-port")
+	if hostPort == 0 {
+		hostPort = containerPort
+	}
+	if err := validateTCPPort(hostPort, "host port"); err != nil {
+		return err
+	}
+	log("Container port: %d, Host port: %d", containerPort, hostPort)
+
+	if err := ensureContainerSocat(cmd.Context(), name); err != nil {
+		return err
+	}
+	listener, hostPort, err := listenTunnelHostPort("127.0.0.1", hostPort, 1, net.Listen)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	runCtx, cancel := context.WithCancel(ctx)
+
+	log("Starting MailHog process: docker exec -u discourse %s mailhog", name)
+	mailhogProcess := exec.CommandContext(runCtx, "docker", "exec", "-u", "discourse", name, "mailhog")
+	mailhogProcess.Stderr = cmd.ErrOrStderr()
+	if err := mailhogProcess.Start(); err != nil {
+		cancel()
+		return fmt.Errorf("failed to start MailHog: %w", err)
+	}
+	log("MailHog started with PID: %d", mailhogProcess.Process.Pid)
+
+	mailhogDone := make(chan error, 1)
+	go func() {
+		mailhogDone <- mailhogProcess.Wait()
+	}()
+	tunnelDone := make(chan error, 1)
+	go func() {
+		tunnelDone <- runTunnelServer(runCtx, listener, name, containerPort, cmd.ErrOrStderr(), runDockerTunnelConnection)
+	}()
+
+	mailhogWaited := false
+	tunnelWaited := false
+	defer func() {
+		cancel()
+		log("Cleanup: killing mailhog inside container")
+		killCmd := exec.Command("docker", "exec", name, "pkill", "-f", "mailhog")
+		if err := killCmd.Run(); err != nil {
+			log("pkill mailhog returned: %v", err)
 		}
-		cfg, err := config.LoadOrCreate(configDir)
-		if err != nil {
-			return err
+		if !mailhogWaited {
+			<-mailhogDone
 		}
-
-		name := currentAgentName(cfg)
-		log("Using container: %s", name)
-		if !docker.Running(name) {
-			return fmt.Errorf("container '%s' is not running; start it with 'dv start'", name)
+		if !tunnelWaited {
+			<-tunnelDone
 		}
+	}()
 
-		containerPort, _ := cmd.Flags().GetInt("port")
-		if containerPort == 0 {
-			containerPort = 8025
-		}
+	fmt.Fprintln(cmd.OutOrStdout(), "Starting MailHog...")
+	fmt.Fprintln(cmd.OutOrStdout(), "✓ MailHog is running and tunneled to localhost")
+	fmt.Fprintln(cmd.OutOrStdout())
+	fmt.Fprintf(cmd.OutOrStdout(), "  Open in your browser: http://localhost:%d\n", hostPort)
+	fmt.Fprintln(cmd.OutOrStdout())
+	fmt.Fprintln(cmd.OutOrStdout(), "  Press Ctrl+C to stop")
 
-		hostPort, _ := cmd.Flags().GetInt("host-port")
-		if hostPort == 0 {
-			hostPort = containerPort
-		}
-		log("Container port: %d, Host port: %d", containerPort, hostPort)
-
-		// Start MailHog in the container as discourse user
-		log("Starting MailHog process: docker exec -u discourse %s mailhog", name)
-		mailhogProcess := exec.Command("docker", "exec", "-u", "discourse", name, "mailhog")
-		mailhogProcess.Stdout = nil
-		mailhogProcess.Stderr = os.Stderr
-		if err := mailhogProcess.Start(); err != nil {
-			return fmt.Errorf("failed to start MailHog: %w", err)
-		}
-		log("MailHog started with PID: %d", mailhogProcess.Process.Pid)
-
-		// Ensure MailHog is killed on exit (must kill inside container since docker exec doesn't forward signals)
-		defer func() {
-			log("Cleanup: killing mailhog inside container")
-			killCmd := exec.Command("docker", "exec", name, "pkill", "-f", "mailhog")
-			if err := killCmd.Run(); err != nil {
-				log("pkill mailhog returned: %v", err)
-			} else {
-				log("pkill mailhog succeeded")
-			}
-			if mailhogProcess.Process != nil {
-				log("Cleanup: killing docker exec process PID %d", mailhogProcess.Process.Pid)
-				mailhogProcess.Process.Kill()
-				mailhogProcess.Wait()
-				log("docker exec process terminated")
-			}
-		}()
-
-		fmt.Fprintln(cmd.OutOrStdout(), "Starting MailHog...")
-
-		// Start socat tunnel
-		socatArgs := []string{
-			fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr,bind=127.0.0.1", hostPort),
-			fmt.Sprintf("EXEC:docker exec -i %s socat STDIO TCP\\:localhost\\:%d", name, containerPort),
-		}
-		log("Starting socat tunnel: socat %s %s", socatArgs[0], socatArgs[1])
-		socatProcess := exec.Command("socat", socatArgs...)
-		socatProcess.Stdout = os.Stdout
-		socatProcess.Stderr = os.Stderr
-		if err := socatProcess.Start(); err != nil {
-			return fmt.Errorf("failed to start socat tunnel: %w", err)
-		}
-		log("socat started with PID: %d", socatProcess.Process.Pid)
-
-		// Ensure socat is killed on exit
-		defer func() {
-			if socatProcess.Process != nil {
-				log("Cleanup: killing socat process PID %d", socatProcess.Process.Pid)
-				socatProcess.Process.Kill()
-				socatProcess.Wait()
-				log("socat process terminated")
-			}
-		}()
-
-		fmt.Fprintln(cmd.OutOrStdout(), "✓ MailHog is running and tunneled to localhost")
+	select {
+	case <-ctx.Done():
 		fmt.Fprintln(cmd.OutOrStdout())
-		fmt.Fprintf(cmd.OutOrStdout(), "  Open in your browser: http://localhost:%d\n", hostPort)
-		fmt.Fprintln(cmd.OutOrStdout())
-		fmt.Fprintln(cmd.OutOrStdout(), "  Press Ctrl+C to stop")
-
-		// Wait for interrupt signal or process exit
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-		defer signal.Stop(sigChan)
-
-		doneChan := make(chan struct{})
-		go func() {
-			log("Waiting for mailhog process to exit...")
-			mailhogProcess.Wait()
-			log("mailhog process exited")
-			close(doneChan)
-		}()
-
-		select {
-		case sig := <-sigChan:
-			log("Received signal: %v", sig)
-			fmt.Fprintln(cmd.OutOrStdout())
-			fmt.Fprintln(cmd.OutOrStdout(), "Stopping MailHog and tunnel...")
-		case <-doneChan:
-			log("MailHog process exited on its own")
-			fmt.Fprintln(cmd.OutOrStdout(), "MailHog exited")
-		}
-
-		log("Exiting RunE, defers will run")
+		fmt.Fprintln(cmd.OutOrStdout(), "Stopping MailHog and tunnel...")
 		return nil
-	},
+	case err := <-mailhogDone:
+		mailhogWaited = true
+		if err != nil && runCtx.Err() == nil {
+			return fmt.Errorf("MailHog exited: %w", err)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "MailHog exited")
+		return nil
+	case err := <-tunnelDone:
+		tunnelWaited = true
+		if err != nil {
+			return fmt.Errorf("MailHog tunnel failed: %w", err)
+		}
+		return nil
+	}
 }
 
 func init() {
 	mailCmd.Flags().Int("port", 8025, "MailHog port inside the container")
-	mailCmd.Flags().Int("host-port", 8025, "Port to expose on localhost (defaults to same as --port)")
+	mailCmd.Flags().Int("host-port", 0, "Port to expose on localhost (defaults to same as --port)")
 	mailCmd.Flags().BoolP("verbose", "V", false, "Enable verbose debug output")
 }

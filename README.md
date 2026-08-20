@@ -278,6 +278,25 @@ dv mail [--port 8025] [--host-port 8025]
 
 Allows you to access MailHog from your browser (e.g., http://localhost:8025) to inspect emails sent by Discourse. Press Ctrl+C to stop the process and the tunnel.
 
+### dv tunnel
+Tunnel any TCP port from a running container to localhost without recreating the container.
+
+```bash
+dv tunnel PORT [--host-port auto|HOST_PORT] [--bind TARGET] [--name NAME]
+```
+
+For example, expose the development PostgreSQL server to a desktop database client:
+
+```bash
+dv tunnel 5432
+```
+
+The client can then connect to `127.0.0.1:5432`. By default, `--host-port auto` starts at the container port and tries up to 20 consecutive host ports, so if `5432` is occupied dv uses `5433`, then `5434`, and so on. Pass a numeric `--host-port` to require one exact port.
+
+The host side binds to `127.0.0.1` by default. Use `--bind all` for all IPv4 interfaces, or pass a specific IPv4 address or interface name such as `--bind 192.168.1.20` or `--bind en0`. Non-loopback binds may make the tunneled service accessible to other devices on the network, so ensure the service has appropriate authentication.
+
+The target service must be reachable at `127.0.0.1` inside the container. The tunnel remains active until you press Ctrl+C. The container must have `socat` installed; dv checks this before opening the tunnel.
+
 ### dv tui
 Launch an interactive TUI to manage containers, images, and run commands.
 

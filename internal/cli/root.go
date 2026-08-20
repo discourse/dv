@@ -144,7 +144,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 		groupDaily:     {enterCmd, consoleCmd, restartCmd, resetCmd, runCmd, runAgentCmd, tuiCmd, branchCmd, prCmd, catchupCmd, copyCmd},
 		groupLifecycle: {newCmd, startCmd, stopCmd, removeCmd, listCmd, selectCmd, renameCmd, psCmd},
 		groupCode:      {importCmd, extractCmd, pluginCmd},
-		groupTools:     {buildCmd, pullCmd, imageCmd, exposeCmd, mailCmd, serveCmd, configCmd, dataCmd, updateCmd, upgradeCmd, versionCmd},
+		groupTools:     {buildCmd, pullCmd, imageCmd, exposeCmd, tunnelCmd, mailCmd, serveCmd, configCmd, dataCmd, updateCmd, upgradeCmd, versionCmd},
 	}
 	for groupID, cmds := range groups {
 		for _, c := range cmds {
@@ -164,6 +164,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(exposeCmd)
+	rootCmd.AddCommand(tunnelCmd)
 	rootCmd.AddCommand(mailCmd)
 	rootCmd.AddCommand(tuiCmd)
 	// Top-level agent management commands
