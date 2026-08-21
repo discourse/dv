@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -30,7 +33,10 @@ var (
 		fmt.Fprintln(os.Stderr, "Warning: stale session selection ignored; falling back to selected agent.")
 	}
 	staleSessionWarnOnce sync.Once
+	listenTCP            = net.Listen
 )
+
+const maxTCPPort = math.MaxUint16
 
 // isTruthyEnv returns true for truthy environment variable values.
 func isTruthyEnv(key string) bool {
@@ -136,39 +142,66 @@ func resolveImage(cfg config.Config, override string) (string, config.ImageConfi
 	return name, img, nil
 }
 
-// isPortInUse returns true when the given TCP port cannot be bound on localhost
-// or is already allocated to a Docker container.
-func isPortInUse(port int, dockerAllocated map[int]bool) bool {
+// isPortInUse reports whether a valid TCP port is already bound locally or is
+// allocated to a Docker container. Bind failures other than EADDRINUSE are
+// returned so callers do not mistake a restricted network sandbox for a run of
+// occupied ports.
+func isPortInUse(port int, dockerAllocated map[int]bool) (bool, error) {
+	if port < 1 || port > maxTCPPort {
+		return false, fmt.Errorf("TCP port %d is outside the valid range 1-%d", port, maxTCPPort)
+	}
 	if dockerAllocated != nil && dockerAllocated[port] {
 		if isTruthyEnv("DV_VERBOSE") {
 			fmt.Fprintf(os.Stderr, "Port %d is already allocated by a Docker container\n", port)
 		}
-		return true
+		return true, nil
 	}
 	// Try to listen on all interfaces. This is the most conservative check.
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	l, err := listenTCP("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return false, fmt.Errorf("checking TCP port %d: %w", port, err)
+		}
 		if isTruthyEnv("DV_VERBOSE") {
 			fmt.Fprintf(os.Stderr, "Port %d is in use (Listen :%d failed: %v)\n", port, port, err)
 		}
-		return true
+		return true, nil
 	}
 	_ = l.Close()
 
 	// Also specifically check 127.0.0.1 and [::1] because sometimes ':' only
 	// binds to one of them depending on system configuration.
 	for _, host := range []string{"127.0.0.1", "[::1]"} {
-		l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+		l, err := listenTCP("tcp", fmt.Sprintf("%s:%d", host, port))
 		if err != nil {
+			if !errors.Is(err, syscall.EADDRINUSE) {
+				return false, fmt.Errorf("checking TCP port %d on %s: %w", port, host, err)
+			}
 			if isTruthyEnv("DV_VERBOSE") {
 				fmt.Fprintf(os.Stderr, "Port %d is in use (Listen %s:%d failed: %v)\n", port, host, port, err)
 			}
-			return true
+			return true, nil
 		}
 		_ = l.Close()
 	}
 
-	return false
+	return false, nil
+}
+
+func findAvailableHostPort(start int, dockerAllocated map[int]bool) (int, error) {
+	if start < 1 || start > maxTCPPort {
+		return 0, fmt.Errorf("starting TCP port %d is outside the valid range 1-%d", start, maxTCPPort)
+	}
+	for port := start; port <= maxTCPPort; port++ {
+		inUse, err := isPortInUse(port, dockerAllocated)
+		if err != nil {
+			return 0, err
+		}
+		if !inUse {
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("no available TCP port found from %d through %d", start, maxTCPPort)
 }
 
 // completeAgentNames suggests existing container names for the selected image.
@@ -429,12 +462,12 @@ func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Conf
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to detect allocated Docker ports: %v\n", err)
 			}
 		}
-		chosenPort := cfg.HostStartingPort
 		if isTruthyEnv("DV_VERBOSE") {
-			fmt.Fprintf(cmd.OutOrStdout(), "Searching for an available port starting from %d...\n", chosenPort)
+			fmt.Fprintf(cmd.OutOrStdout(), "Searching for an available port starting from %d...\n", cfg.HostStartingPort)
 		}
-		for isPortInUse(chosenPort, allocated) {
-			chosenPort++
+		chosenPort, err := findAvailableHostPort(cfg.HostStartingPort, allocated)
+		if err != nil {
+			return result, err
 		}
 		if isTruthyEnv("DV_VERBOSE") {
 			fmt.Fprintf(cmd.OutOrStdout(), "Selected port %d.\n", chosenPort)

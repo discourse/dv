@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"testing"
 
 	"dv/internal/config"
@@ -441,7 +442,10 @@ func TestIsPortInUse_DockerAllocated(t *testing.T) {
 			// To avoid flaky tests from actual port binding, we only test cases where
 			// docker map returns true early, before trying to bind
 			if tt.want {
-				got := isPortInUse(tt.port, tt.allocated)
+				got, err := isPortInUse(tt.port, tt.allocated)
+				if err != nil {
+					t.Fatalf("isPortInUse() error = %v", err)
+				}
 				if got != tt.want {
 					t.Errorf("isPortInUse(%d, %v) = %v, want %v", tt.port, tt.allocated, got, tt.want)
 				}
@@ -464,7 +468,11 @@ func TestIsPortInUse_ActualBinding(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 
 	// The port is now in use by our listener
-	if !isPortInUse(port, nil) {
+	inUse, err := isPortInUse(port, nil)
+	if err != nil {
+		t.Fatalf("isPortInUse() error = %v", err)
+	}
+	if !inUse {
 		t.Errorf("isPortInUse(%d, nil) = false, want true (port is bound)", port)
 	}
 }
@@ -484,12 +492,38 @@ func TestIsPortInUse_AvailablePort(t *testing.T) {
 
 	// Port should now be available (with small race window)
 	// We pass an empty docker map to avoid docker-allocated false positives
-	got := isPortInUse(port, map[int]bool{})
+	got, err := isPortInUse(port, map[int]bool{})
+	if err != nil {
+		t.Fatalf("isPortInUse() error = %v", err)
+	}
 	// Note: This may occasionally fail due to port reuse timing
 	// If this test becomes flaky, we can skip it or use a more robust approach
 	if got {
 		t.Logf("isPortInUse(%d) = true for recently released port (possible race)", port)
 		// Don't fail - this can happen due to TIME_WAIT or port reuse
+	}
+}
+
+func TestIsPortInUse_PropagatesRestrictedNetworkError(t *testing.T) {
+	original := listenTCP
+	listenTCP = func(string, string) (net.Listener, error) {
+		return nil, syscall.EPERM
+	}
+	defer func() { listenTCP = original }()
+
+	inUse, err := isPortInUse(3000, nil)
+	if err == nil || !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("isPortInUse() error = %v, want EPERM", err)
+	}
+	if inUse {
+		t.Fatal("isPortInUse() = true for a permission error")
+	}
+}
+
+func TestFindAvailablePort_StopsAtMaximumPort(t *testing.T) {
+	_, err := findAvailableHostPort(maxTCPPort, map[int]bool{maxTCPPort: true})
+	if err == nil {
+		t.Fatal("findAvailablePort() error = nil, want exhausted range error")
 	}
 }
 
