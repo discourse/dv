@@ -88,12 +88,12 @@ var startCmd = &cobra.Command{
 					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to detect allocated Docker ports: %v\n", err)
 				}
 			}
-			chosenPort := hostPort
 			if isTruthyEnv("DV_VERBOSE") {
-				fmt.Fprintf(cmd.OutOrStdout(), "Searching for an available port starting from %d...\n", chosenPort)
+				fmt.Fprintf(cmd.OutOrStdout(), "Searching for an available port starting from %d...\n", hostPort)
 			}
-			for isPortInUse(chosenPort, allocated) {
-				chosenPort++
+			chosenPort, err := findAvailableHostPort(hostPort, allocated)
+			if err != nil {
+				return err
 			}
 			if isTruthyEnv("DV_VERBOSE") {
 				fmt.Fprintf(cmd.OutOrStdout(), "Selected port %d.\n", chosenPort)
@@ -139,15 +139,19 @@ var startCmd = &cobra.Command{
 				// Remove our own port from the check to avoid false positive remapping
 				delete(allocated, existingPort)
 
-				if isPortInUse(existingPort, allocated) {
+				inUse, err := isPortInUse(existingPort, allocated)
+				if err != nil {
+					return err
+				}
+				if inUse {
 					if noRemap {
 						return fmt.Errorf("port %d is in use; free the port, use --reset to recreate, or remove --no-remap to auto-remap", existingPort)
 					}
 
 					// Find next available port
-					newPort := existingPort
-					for isPortInUse(newPort, allocated) {
-						newPort++
+					newPort, err := findAvailableHostPort(existingPort, allocated)
+					if err != nil {
+						return err
 					}
 
 					fmt.Fprintf(cmd.OutOrStdout(), "Port %d in use, remapping to %d...\n", existingPort, newPort)

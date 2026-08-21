@@ -396,9 +396,9 @@ func handleContainerCreate(w http.ResponseWriter, r *http.Request, configDir str
 		}
 		if !docker.Exists(name) {
 			allocated, _ := docker.AllocatedPorts()
-			chosenPort := hostPort
-			for isPortInUse(chosenPort, allocated) {
-				chosenPort++
+			chosenPort, err := findAvailableHostPort(hostPort, allocated)
+			if err != nil {
+				return err
 			}
 			if chosenPort != hostPort {
 				logger(fmt.Sprintf("Port %d in use, using %d.\n", hostPort, chosenPort))
@@ -596,9 +596,9 @@ func handleContainerStart(w http.ResponseWriter, r *http.Request, configDir, nam
 		}
 		if !docker.Exists(name) {
 			allocated, _ := docker.AllocatedPorts()
-			chosenPort := cfg.HostStartingPort
-			for isPortInUse(chosenPort, allocated) {
-				chosenPort++
+			chosenPort, err := findAvailableHostPort(cfg.HostStartingPort, allocated)
+			if err != nil {
+				return err
 			}
 			labels := map[string]string{
 				"com.dv.owner":      "dv",
