@@ -675,11 +675,15 @@ Use `copyRules` in your config to copy host files into the container. Each rule 
 ```json
 {
   "copyRules": [
-    { "host": "~/.codex/auth.json",      "container": "/home/discourse/.codex/auth.json",      "agents": ["codex"] }
+    { "host": "~/.codex/auth.json",      "container": "/home/discourse/.codex/auth.json",      "agents": ["codex"] },
+    { "host": "~/.codex/config.toml",    "container": "/home/discourse/.codex/config.toml",    "agents": ["codex"] },
+    { "host": "~/.config/opencode/AGENTS.md", "container": "/home/discourse/.config/opencode/AGENTS.md", "agents": ["opencode"] },
+    { "host": "~/.config/opencode/opencode.json", "container": "/home/discourse/.config/opencode/opencode.json", "agents": ["opencode"] },
+    { "host": "~/.config/opencode/opencode.jsonc", "container": "/home/discourse/.config/opencode/opencode.jsonc", "agents": ["opencode"] }
   ]
 }
 ```
-The parent directory inside the container is created if needed, glob patterns are expanded on the host, and ownership is set to `discourse:discourse` so files stay readable by the working user.
+These defaults include Codex's global configuration plus OpenCode's global instructions and general JSON/JSONC settings. The parent directory inside the container is created if needed, glob patterns are expanded on the host, and ownership is set to `discourse:discourse` so files stay readable by the working user.
 
 ### dv data
 Print the data directory path (`${XDG_DATA_HOME}/dv`).

@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const currentCopyRulesDefaultsVersion = 2
+const currentCopyRulesDefaultsVersion = 3
 
 type Config struct {
 	ImageTag         string            `json:"imageTag"`
@@ -431,8 +431,10 @@ func DefaultCopyRules() []CopyRule {
 			SkipIfPresent: true,
 		},
 	}
+	rules = append(rules, codexConfigCopyRules()...)
 	rules = append(rules, grokCopyRules()...)
-	return append(rules, agyCopyRules()...)
+	rules = append(rules, agyCopyRules()...)
+	return append(rules, opencodeCopyRules()...)
 }
 
 func (cfg *Config) migrateCopyFiles() {
@@ -473,6 +475,11 @@ func (cfg *Config) migrateCopyRuleDefaults() {
 		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, agyCopyRules())
 		cfg.CopyRulesDefaultsVersion = 2
 	}
+	if cfg.CopyRulesDefaultsVersion < 3 {
+		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, opencodeCopyRules())
+		cfg.CopyRules = appendMissingDefaultCopyRules(cfg.CopyRules, codexConfigCopyRules())
+		cfg.CopyRulesDefaultsVersion = 3
+	}
 	if cfg.CopyRulesDefaultsVersion < currentCopyRulesDefaultsVersion {
 		cfg.CopyRulesDefaultsVersion = currentCopyRulesDefaultsVersion
 	}
@@ -504,6 +511,36 @@ func grokCopyRules() []CopyRule {
 			Host:      "~/.grok/mcp_credentials.json",
 			Container: "/home/discourse/.grok/mcp_credentials.json",
 			Agents:    []string{"grok"},
+		},
+	}
+}
+
+func opencodeCopyRules() []CopyRule {
+	return []CopyRule{
+		{
+			Host:      "~/.config/opencode/AGENTS.md",
+			Container: "/home/discourse/.config/opencode/AGENTS.md",
+			Agents:    []string{"opencode"},
+		},
+		{
+			Host:      "~/.config/opencode/opencode.json",
+			Container: "/home/discourse/.config/opencode/opencode.json",
+			Agents:    []string{"opencode"},
+		},
+		{
+			Host:      "~/.config/opencode/opencode.jsonc",
+			Container: "/home/discourse/.config/opencode/opencode.jsonc",
+			Agents:    []string{"opencode"},
+		},
+	}
+}
+
+func codexConfigCopyRules() []CopyRule {
+	return []CopyRule{
+		{
+			Host:      "~/.codex/config.toml",
+			Container: "/home/discourse/.codex/config.toml",
+			Agents:    []string{"codex"},
 		},
 	}
 }
