@@ -8,7 +8,7 @@ RUN apt-get update
 RUN apt-get install -y --no-install-recommends vim ripgrep zip inotify-tools chromium libnss3-tools curl caddy
 
 RUN chown discourse:discourse /var/www
-RUN sudo -H -u discourse /bin/bash -lc 'git clone https://github.com/discourse/discourse.git /var/www/discourse'
+RUN sudo -H -u discourse /bin/bash -lc 'git clone --filter=blob:none --single-branch https://github.com/discourse/discourse.git /var/www/discourse'
 RUN sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && bundle'
 RUN sudo -H -u discourse /bin/bash -lc 'cd /var/www/discourse && pnpm install'
 
