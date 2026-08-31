@@ -73,6 +73,7 @@ var configLocalProxyCmd = &cobra.Command{
 		httpPortFlag, _ := cmd.Flags().GetInt("http-port")
 		httpsPortFlag, _ := cmd.Flags().GetInt("https-port")
 		apiPortFlag, _ := cmd.Flags().GetInt("api-port")
+		discoursePortFlag, _ := cmd.Flags().GetInt("discourse-port")
 		rebuild, _ := cmd.Flags().GetBool("rebuild")
 		recreate, _ := cmd.Flags().GetBool("recreate")
 		public, _ := cmd.Flags().GetBool("public")
@@ -97,6 +98,9 @@ var configLocalProxyCmd = &cobra.Command{
 		}
 		if apiPortFlag > 0 {
 			lp.APIPort = apiPortFlag
+		}
+		if cmd.Flags().Changed("discourse-port") {
+			lp.DiscoursePort = discoursePortFlag
 		}
 		// HTTPS is always off by default, must explicitly pass --https to enable
 		lp.HTTPS = httpsEnabled
@@ -178,6 +182,7 @@ func init() {
 	configLocalProxyCmd.Flags().Bool("https", false, "Enable HTTPS for NAME.dv.localhost using mkcert and redirect HTTP to HTTPS")
 	configLocalProxyCmd.Flags().Int("https-port", 0, "Host port that will listen for HTTPS NAME.dv.localhost requests (defaults to 443 when --https is enabled)")
 	configLocalProxyCmd.Flags().Int("api-port", 0, "Host port for the proxy management API")
+	configLocalProxyCmd.Flags().Int("discourse-port", 0, "Port Discourse uses in generated URLs (default: same as --http-port or --https-port)")
 	configLocalProxyCmd.Flags().Bool("rebuild", false, "Force rebuilding the proxy image even if it exists")
 	configLocalProxyCmd.Flags().Bool("recreate", false, "Remove any existing proxy container before starting")
 	configLocalProxyCmd.Flags().Bool("public", false, "Listen on all network interfaces (default: private/localhost only)")
@@ -196,5 +201,6 @@ func localProxySettingsChanged(prev config.LocalProxyConfig, next config.LocalPr
 		prev.HTTPSPort != next.HTTPSPort ||
 		prev.APIPort != next.APIPort ||
 		prev.Public != next.Public ||
-		prev.Hostname != next.Hostname
+		prev.Hostname != next.Hostname ||
+		prev.DiscoursePort != next.DiscoursePort
 }

@@ -44,13 +44,21 @@ func applyLocalProxyMetadata(cfg config.Config, containerName string, hostPort i
 		envs["DV_LOCAL_PROXY_HTTPS_PORT"] = strconv.Itoa(lp.HTTPSPort)
 		envs["DISCOURSE_FORCE_HTTPS"] = "true"
 		envs["DISCOURSE_DEV_ALLOW_HTTPS"] = "1"
-		// Override DISCOURSE_PORT so URLs use the external HTTPS port, not the internal one
-		envs["DISCOURSE_PORT"] = strconv.Itoa(lp.HTTPSPort)
+		// Override DISCOURSE_PORT so URLs use the external HTTPS port; use DiscoursePort when a different port is needed
+		discoursePort := lp.HTTPSPort
+		if lp.DiscoursePort > 0 {
+			discoursePort = lp.DiscoursePort
+		}
+		envs["DISCOURSE_PORT"] = strconv.Itoa(discoursePort)
 	} else {
 		envs["DV_LOCAL_PROXY_SCHEME"] = "http"
 		envs["DV_LOCAL_PROXY_PORT"] = strconv.Itoa(lp.HTTPPort)
-		// Override DISCOURSE_PORT so URLs use the external HTTP port, not the internal one
-		envs["DISCOURSE_PORT"] = strconv.Itoa(lp.HTTPPort)
+		// Override DISCOURSE_PORT so URLs use the external HTTP port; use DiscoursePort when a different port is needed
+		discoursePort := lp.HTTPPort
+		if lp.DiscoursePort > 0 {
+			discoursePort = lp.DiscoursePort
+		}
+		envs["DISCOURSE_PORT"] = strconv.Itoa(discoursePort)
 	}
 
 	return host
