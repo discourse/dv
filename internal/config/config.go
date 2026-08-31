@@ -164,6 +164,7 @@ type LocalProxyConfig struct {
 	APIPort       int    `json:"apiPort"`
 	Public        bool   `json:"public"`
 	Hostname      string `json:"hostname,omitempty"`
+	DiscoursePort int    `json:"discoursePort,omitempty"`
 }
 
 func Default() Config {
