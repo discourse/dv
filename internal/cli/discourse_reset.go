@@ -5,9 +5,21 @@ import (
 	"strings"
 )
 
-// buildGitCleanupCommands generates commands to clean the working tree and ensure full history
+// buildGitCleanupCommands generates commands to recover stale Git locks, clean
+// the working tree, and ensure full history.
 func buildGitCleanupCommands() []string {
 	return []string{
+		// Git leaves lock files behind when a process is interrupted. Refuse to
+		// remove HEAD.lock while another Git process is running, but recover it
+		// automatically when it is clearly orphaned. git --git-path also works
+		// when .git is a file (for example, in a linked worktree).
+		"head_lock=$(git rev-parse --git-path HEAD.lock)",
+		"if [ -e \"$head_lock\" ]; then",
+		"  if ! command -v ps >/dev/null 2>&1; then echo \"Error: found $head_lock but cannot verify whether a Git process is running; remove it manually after checking\" >&2; exit 1; fi",
+		"  if ps -eo comm= | grep -Eq '^git($|-)'; then echo \"Error: found $head_lock while a Git process is running; wait for it to finish and retry\" >&2; exit 1; fi",
+		"  echo \"Removing stale Git lock: $head_lock\"",
+		"  rm -f -- \"$head_lock\"",
+		"fi",
 		"echo 'Cleaning working tree...'",
 		"git reset --hard",
 		"git clean -fd",

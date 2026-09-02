@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestBuildGitCleanupCommands_HandlesStaleHeadLockBeforeReset(t *testing.T) {
+	t.Parallel()
+
+	script := strings.Join(buildGitCleanupCommands(), "\n")
+	lockCheck := strings.Index(script, "git rev-parse --git-path HEAD.lock")
+	reset := strings.Index(script, "git reset --hard")
+
+	if lockCheck == -1 {
+		t.Fatalf("missing HEAD lock detection:\n%s", script)
+	}
+	if !strings.Contains(script, "ps -eo comm=") {
+		t.Fatalf("lock recovery must check for active Git processes:\n%s", script)
+	}
+	if !strings.Contains(script, `rm -f -- "$head_lock"`) {
+		t.Fatalf("missing stale HEAD lock removal:\n%s", script)
+	}
+	if reset == -1 || lockCheck > reset {
+		t.Fatalf("HEAD lock recovery must happen before git reset:\n%s", script)
+	}
+}
+
 func TestBuildAssetsClobberCommands_WaitsForPostgres(t *testing.T) {
 	t.Parallel()
 
