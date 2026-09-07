@@ -142,6 +142,9 @@ func buildCatchupScript(workdir string, plugins []string) string {
 		"bundle install",
 		"echo '==> Installing pnpm dependencies...'",
 		"pnpm install",
+	)
+	lines = append(lines, buildPostgresReadinessCommands()...)
+	lines = append(lines,
 		"",
 		"echo '==> Migrating development database...'",
 		"bin/rake db:migrate",

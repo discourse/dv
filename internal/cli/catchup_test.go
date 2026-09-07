@@ -122,3 +122,23 @@ func TestBuildCatchupScript_NoGitPull(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCatchupScriptWaitsForPostgresBeforeMigrations(t *testing.T) {
+	t.Parallel()
+
+	script := buildCatchupScript("/var/www/discourse", nil)
+	barrier := strings.Join(buildPostgresReadinessCommands(), "\n")
+	ready := strings.Index(script, barrier)
+	if ready == -1 {
+		t.Fatalf("missing bounded PostgreSQL readiness check:\n%s", script)
+	}
+	for _, migration := range []string{"bin/rake db:migrate", "RAILS_ENV=test bin/rake db:migrate"} {
+		pos := strings.Index(script, migration)
+		if pos == -1 || pos < ready+len(barrier) {
+			t.Fatalf("PostgreSQL readiness must precede %q:\n%s", migration, script)
+		}
+	}
+	if !strings.HasPrefix(script, "set -euo pipefail\n") {
+		t.Fatal("catchup must abort when PostgreSQL readiness times out")
+	}
+}
