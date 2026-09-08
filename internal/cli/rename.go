@@ -36,6 +36,18 @@ var renameCmd = &cobra.Command{
 }
 
 func runRename(cmd *cobra.Command, oldName, newName string) error {
+	dir, err := xdg.ConfigDir()
+	if err != nil {
+		return err
+	}
+	return runRenameInConfig(cmd, oldName, newName, dir)
+}
+
+func runRenameInConfig(cmd *cobra.Command, oldName, newName, configDir string) error {
+	return withHostnameOperationLockAt(cmd, configDir, func() error { return runRenameLocked(cmd, oldName, newName, configDir) })
+}
+
+func runRenameLocked(cmd *cobra.Command, oldName, newName, configDir string) error {
 	operationCtx := cmd.Context()
 	if operationCtx == nil {
 		operationCtx = context.Background()
@@ -45,12 +57,11 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 	if oldName == "" || newName == "" {
 		return fmt.Errorf("invalid names")
 	}
-	configDir, err := xdg.ConfigDir()
+	cfg, err := config.LoadOrCreate(configDir)
 	if err != nil {
 		return err
 	}
-	cfg, err := config.LoadOrCreate(configDir)
-	if err != nil {
+	if err := checkPrimaryHostname(cfg, newName); err != nil {
 		return err
 	}
 	renamingEnvSelection := os.Getenv("DV_AGENT") == oldName
@@ -96,6 +107,17 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 				latest.ContainerImages[newName] = img
 			}
 		}
+		if hosts, ok := latest.HostnameAliases[oldName]; ok {
+			delete(latest.HostnameAliases, oldName)
+			latest.HostnameAliases[newName] = hosts
+		}
+		if hosts, ok := latest.HostnameRemovals[oldName]; ok {
+			delete(latest.HostnameRemovals, oldName)
+			queueHostnameRemovals(latest, newName, hosts...)
+		}
+		if proxyHost != newHost {
+			queueHostnameRemovals(latest, newName, proxyHost)
+		}
 		if latest.CustomWorkdirs != nil {
 			if workdir, ok := latest.CustomWorkdirs[oldName]; ok {
 				delete(latest.CustomWorkdirs, oldName)
@@ -120,7 +142,10 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 		cfg = *latest
 		return nil
 	}); err != nil {
-		return err
+		if !config.IsProjectionError(err) {
+			return err
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Renamed agent '%s' -> '%s'\n", oldName, newName)
 	if renamingEnvSelection {
@@ -128,21 +153,41 @@ func runRename(cmd *cobra.Command, oldName, newName string) error {
 	}
 
 	if proxyHost != "" {
-		if docker.Running(newName) {
-			cmdLine := []string{"bash", "-c", fmt.Sprintf(
-				"sed -i 's/\\b%s\\b/%s/g' /etc/hosts; grep -q '\\b%s\\b' /etc/hosts || echo '127.0.0.1 %s' >> /etc/hosts",
-				proxyHost, newHost, newHost, newHost,
-			)}
-			_, _ = docker.ExecAsRoot(newName, "/", nil, cmdLine)
+		if _, managed := cfg.HostnameAliases[newName]; managed && docker.Running(newName) {
+			if err := syncContainerHostnames(cmd, cfg, newName); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
+			}
+		} else if docker.Running(newName) {
+			if err := renameContainerHostEntry(cmd, newName, proxyHost, newHost); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: update hosts after rename: %v\n", err)
+			}
 		}
 
 		if localproxy.Running(cfg.LocalProxy) && containerPort > 0 {
-			_ = localproxy.RemoveRoute(cfg.LocalProxy, proxyHost)
-			registerWithLocalProxy(cmd, cfg, newName, newHost, containerPort)
+			if err := reconcileHostnameRoutes(configDir, cfg, newName); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: proxy update after rename incomplete: %v (retry dv start %s)\n", err, newName)
+			}
 		}
 		if proxyHost != newHost {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Proxy hostname updated: %s -> %s. Restart with --reset if assets still point to the old name.\n", proxyHost, newHost)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Proxy hostname updated: %s -> %s. Manually launched application processes may need their hostname settings updated.\n", proxyHost, newHost)
 		}
 	}
 	return nil
+}
+
+// Docker bind-mounts /etc/hosts, so write through it rather than using sed -i.
+// Pass hostnames as quoted data and match whole fields, not interpolated regexes.
+func renameContainerHostEntry(cmd *cobra.Command, name, oldHost, newHost string) error {
+	script := "set -eu\nold_host=" + shellQuote(oldHost) + "\nnew_host=" + shellQuote(newHost) + "\n" + `
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+awk -v old="$old_host" -v new="$new_host" '{ for(i=2;i<=NF;i++) { if($i ~ /^#/) break; if($i == old) $i=new; if($i == new) found=1 } print } END { if(!found) print "127.0.0.1 " new }' /etc/hosts > "$tmp"
+cat "$tmp" > /etc/hosts
+`
+	ctx := context.Background()
+	if cmd != nil && cmd.Context() != nil {
+		ctx = cmd.Context()
+	}
+	_, err := docker.ExecAsRootScriptContext(ctx, name, "/", script)
+	return err
 }

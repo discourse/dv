@@ -37,6 +37,12 @@ func EnsureContainer(configDir string, cfg config.LocalProxyConfig, recreate boo
 		return fmt.Errorf("https and http ports must differ")
 	}
 
+	// Publish the alias-only mount under the config lock, including on upgrades
+	// from configs that predate the projection file.
+	if err := config.PublishProxyAliases(configDir); err != nil {
+		return err
+	}
+
 	if recreate && docker.Exists(name) {
 		_ = docker.Stop(name)
 		_ = docker.Remove(name)
@@ -59,6 +65,11 @@ func EnsureContainer(configDir string, cfg config.LocalProxyConfig, recreate boo
 	}
 	if PortOccupied(cfg.APIPort) {
 		return fmt.Errorf("host port %d is already in use", cfg.APIPort)
+	}
+
+	aliasDir, err := filepath.Abs(filepath.Join(configDir, "proxy-aliases"))
+	if err != nil {
+		return err
 	}
 
 	args := []string{
@@ -92,6 +103,7 @@ func EnsureContainer(configDir string, cfg config.LocalProxyConfig, recreate boo
 		args = append(args, "--label", LabelHTTPSPort+"="+strconv.Itoa(cfg.HTTPSPort))
 	}
 
+	args = append(args, "-v", aliasDir+":/etc/local-proxy/aliases:ro", "-e", "PROXY_ALIASES_FILE=/etc/local-proxy/aliases/aliases.json")
 	args = append(args, "-e", "PROXY_HTTP_ADDR=:80")
 	args = append(args, "-e", "PROXY_API_ADDR=:2080")
 	args = append(args, "-e", "PROXY_HOSTNAME_SUFFIX="+cfg.Hostname)

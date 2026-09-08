@@ -18,160 +18,174 @@ var configLocalProxyCmd = &cobra.Command{
 	Short: "Run a local proxy so containers are reachable via NAME.dv.localhost",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configDir, err := xdg.ConfigDir()
-		if err != nil {
-			return err
-		}
-		cfg, err := config.LoadOrCreate(configDir)
-		if err != nil {
-			return err
-		}
+		return withHostnameOperationLock(cmd, func() error { return configureLocalProxy(cmd, args) })
+	},
+}
 
-		// Handle --remove flag
-		removeFlag, _ := cmd.Flags().GetBool("remove")
-		if removeFlag {
-			lp := cfg.LocalProxy
-			lp.ApplyDefaults()
+func configureLocalProxy(cmd *cobra.Command, args []string) error {
+	configDir, err := xdg.ConfigDir()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		return err
+	}
 
-			if docker.Exists(lp.ContainerName) {
-				if docker.Running(lp.ContainerName) {
-					fmt.Fprintf(cmd.OutOrStdout(), "Stopping local proxy container '%s'...\n", lp.ContainerName)
-					if err := docker.Stop(lp.ContainerName); err != nil {
-						return fmt.Errorf("failed to stop container: %w", err)
-					}
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Removing local proxy container '%s'...\n", lp.ContainerName)
-				if err := docker.Remove(lp.ContainerName); err != nil {
-					return fmt.Errorf("failed to remove container: %w", err)
-				}
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Local proxy container '%s' does not exist.\n", lp.ContainerName)
-			}
-
-			if docker.ImageExists(lp.ImageTag) {
-				fmt.Fprintf(cmd.OutOrStdout(), "Removing local proxy image '%s'...\n", lp.ImageTag)
-				if err := docker.RemoveImage(lp.ImageTag); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to remove image: %v\n", err)
-				}
-			}
-
-			cfg.LocalProxy.Enabled = false
-			if err := config.Save(configDir, cfg); err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Local proxy removed.")
-			return nil
-		}
-
-		prev := cfg.LocalProxy
-		prev.ApplyDefaults()
-		lp := prev
-
-		nameFlag, _ := cmd.Flags().GetString("name")
-		imageFlag, _ := cmd.Flags().GetString("image")
-		hostnameFlag, _ := cmd.Flags().GetString("hostname")
-		httpPortFlag, _ := cmd.Flags().GetInt("http-port")
-		httpsPortFlag, _ := cmd.Flags().GetInt("https-port")
-		apiPortFlag, _ := cmd.Flags().GetInt("api-port")
-		discoursePortFlag, _ := cmd.Flags().GetInt("discourse-port")
-		rebuild, _ := cmd.Flags().GetBool("rebuild")
-		recreate, _ := cmd.Flags().GetBool("recreate")
-		public, _ := cmd.Flags().GetBool("public")
-		httpsEnabled, _ := cmd.Flags().GetBool("https")
-		publicChanged := cmd.Flags().Changed("public")
-		hostnameChanged := cmd.Flags().Changed("hostname")
-
-		if name := trimFlag(nameFlag); name != "" {
-			lp.ContainerName = name
-		}
-		if img := trimFlag(imageFlag); img != "" {
-			lp.ImageTag = img
-		}
-		if hostnameChanged {
-			lp.Hostname = trimFlag(hostnameFlag)
-		}
-		if httpPortFlag > 0 {
-			lp.HTTPPort = httpPortFlag
-		}
-		if httpsPortFlag > 0 {
-			lp.HTTPSPort = httpsPortFlag
-		}
-		if apiPortFlag > 0 {
-			lp.APIPort = apiPortFlag
-		}
-		if cmd.Flags().Changed("discourse-port") {
-			lp.DiscoursePort = discoursePortFlag
-		}
-		// HTTPS is always off by default, must explicitly pass --https to enable
-		lp.HTTPS = httpsEnabled
-		if publicChanged {
-			lp.Public = public
-		}
+	// Handle --remove flag
+	removeFlag, _ := cmd.Flags().GetBool("remove")
+	if removeFlag {
+		lp := cfg.LocalProxy
 		lp.ApplyDefaults()
 
-		if lp.HTTPPort == lp.APIPort {
-			return fmt.Errorf("http-port and api-port must differ")
-		}
-		if lp.HTTPS && lp.HTTPSPort == lp.APIPort {
-			return fmt.Errorf("https-port and api-port must differ")
-		}
-		if lp.HTTPS && lp.HTTPSPort == lp.HTTPPort {
-			return fmt.Errorf("https-port and http-port must differ")
-		}
-
-		if lp.HTTPS {
-			// The proxy image needs the latest embedded assets to support HTTPS.
-			rebuild = true
-		}
-
-		if rebuild || !docker.ImageExists(lp.ImageTag) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Building local proxy image '%s'...\n", lp.ImageTag)
-			if err := localproxy.BuildImage(configDir, lp); err != nil {
-				return err
+		if docker.Exists(lp.ContainerName) {
+			if docker.Running(lp.ContainerName) {
+				fmt.Fprintf(cmd.OutOrStdout(), "Stopping local proxy container '%s'...\n", lp.ContainerName)
+				if err := docker.Stop(lp.ContainerName); err != nil {
+					return fmt.Errorf("failed to stop container: %w", err)
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Removing local proxy container '%s'...\n", lp.ContainerName)
+			if err := docker.Remove(lp.ContainerName); err != nil {
+				return fmt.Errorf("failed to remove container: %w", err)
 			}
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Reusing existing image '%s'.\n", lp.ImageTag)
+			fmt.Fprintf(cmd.OutOrStdout(), "Local proxy container '%s' does not exist.\n", lp.ContainerName)
 		}
 
-		if docker.Exists(lp.ContainerName) && localProxySettingsChanged(prev, lp) {
-			recreate = true
-		}
-
-		if lp.HTTPS {
-			if err := localproxy.EnsureMKCertTLS(configDir, lp.Hostname); err != nil {
-				return err
+		if docker.ImageExists(lp.ImageTag) {
+			fmt.Fprintf(cmd.OutOrStdout(), "Removing local proxy image '%s'...\n", lp.ImageTag)
+			if err := docker.RemoveImage(lp.ImageTag); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to remove image: %v\n", err)
 			}
 		}
 
-		if err := localproxy.EnsureContainer(configDir, lp, recreate); err != nil {
-			return err
-		}
-		if err := localproxy.Healthy(lp, 5*time.Second); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
-		}
-
-		lp.Enabled = true
-		cfg.LocalProxy = lp
+		cfg.LocalProxy.Enabled = false
 		if err := config.Save(configDir, cfg); err != nil {
 			return err
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Local proxy removed.")
+		return nil
+	}
 
-		if lp.Public {
-			if lp.HTTPS {
-				fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (HTTP→HTTPS redirect), %d (HTTPS) (public); API on %d (public).\n", lp.ContainerName, lp.HTTPPort, lp.HTTPSPort, lp.APIPort)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (public); API on %d (public).\n", lp.ContainerName, lp.HTTPPort, lp.APIPort)
-			}
-		} else {
-			if lp.HTTPS {
-				fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (HTTP→HTTPS redirect), %d (HTTPS) (localhost only); API on %d (localhost only).\n", lp.ContainerName, lp.HTTPPort, lp.HTTPSPort, lp.APIPort)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (localhost only); API on %d (localhost only).\n", lp.ContainerName, lp.HTTPPort, lp.APIPort)
+	prev := cfg.LocalProxy
+	prev.ApplyDefaults()
+	lp := prev
+
+	nameFlag, _ := cmd.Flags().GetString("name")
+	imageFlag, _ := cmd.Flags().GetString("image")
+	hostnameFlag, _ := cmd.Flags().GetString("hostname")
+	httpPortFlag, _ := cmd.Flags().GetInt("http-port")
+	httpsPortFlag, _ := cmd.Flags().GetInt("https-port")
+	apiPortFlag, _ := cmd.Flags().GetInt("api-port")
+	discoursePortFlag, _ := cmd.Flags().GetInt("discourse-port")
+	rebuild, _ := cmd.Flags().GetBool("rebuild")
+	recreate, _ := cmd.Flags().GetBool("recreate")
+	public, _ := cmd.Flags().GetBool("public")
+	publicChanged := cmd.Flags().Changed("public")
+	hostnameChanged := cmd.Flags().Changed("hostname")
+
+	if name := trimFlag(nameFlag); name != "" {
+		lp.ContainerName = name
+	}
+	if img := trimFlag(imageFlag); img != "" {
+		lp.ImageTag = img
+	}
+	if hostnameChanged {
+		lp.Hostname = trimFlag(hostnameFlag)
+	}
+	if httpPortFlag > 0 {
+		lp.HTTPPort = httpPortFlag
+	}
+	if httpsPortFlag > 0 {
+		lp.HTTPSPort = httpsPortFlag
+	}
+	if apiPortFlag > 0 {
+		lp.APIPort = apiPortFlag
+	}
+	if cmd.Flags().Changed("discourse-port") {
+		lp.DiscoursePort = discoursePortFlag
+	}
+	lp.HTTPS = localProxyHTTPSFlag(cmd, lp.HTTPS)
+	if publicChanged {
+		lp.Public = public
+	}
+	lp.ApplyDefaults()
+	if lp.Hostname != prev.Hostname {
+		for _, hosts := range cfg.HostnameRemovals {
+			if len(hosts) > 0 {
+				return fmt.Errorf("complete pending hostname removals before changing the proxy hostname suffix")
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "New containers will register as NAME.%s when this proxy is running. Remove the proxy container to stop using it.\n", lp.Hostname)
-		return nil
-	},
+		for _, hosts := range cfg.HostnameAliases {
+			if len(hosts) > 0 {
+				return fmt.Errorf("remove hostname aliases before changing the proxy hostname suffix")
+			}
+		}
+	}
+
+	if lp.HTTPPort == lp.APIPort {
+		return fmt.Errorf("http-port and api-port must differ")
+	}
+	if lp.HTTPS && lp.HTTPSPort == lp.APIPort {
+		return fmt.Errorf("https-port and api-port must differ")
+	}
+	if lp.HTTPS && lp.HTTPSPort == lp.HTTPPort {
+		return fmt.Errorf("https-port and http-port must differ")
+	}
+
+	if lp.HTTPS {
+		// The proxy image needs the latest embedded assets to support HTTPS.
+		rebuild = true
+	}
+
+	if rebuild || !docker.ImageExists(lp.ImageTag) {
+		fmt.Fprintf(cmd.OutOrStdout(), "Building local proxy image '%s'...\n", lp.ImageTag)
+		if err := localproxy.BuildImage(configDir, lp); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Reusing existing image '%s'.\n", lp.ImageTag)
+	}
+
+	if docker.Exists(lp.ContainerName) && localProxySettingsChanged(prev, lp) {
+		recreate = true
+	}
+
+	if lp.HTTPS {
+		if err := localproxy.EnsureMKCertTLS(configDir, lp.Hostname); err != nil {
+			return err
+		}
+	}
+
+	if err := localproxy.EnsureContainer(configDir, lp, recreate); err != nil {
+		return err
+	}
+	if err := localproxy.Healthy(lp, 5*time.Second); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
+	}
+
+	lp.Enabled = true
+	cfg.LocalProxy = lp
+	if err := config.Save(configDir, cfg); err != nil {
+		return err
+	}
+
+	if lp.Public {
+		if lp.HTTPS {
+			fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (HTTP→HTTPS redirect), %d (HTTPS) (public); API on %d (public).\n", lp.ContainerName, lp.HTTPPort, lp.HTTPSPort, lp.APIPort)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (public); API on %d (public).\n", lp.ContainerName, lp.HTTPPort, lp.APIPort)
+		}
+	} else {
+		if lp.HTTPS {
+			fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (HTTP→HTTPS redirect), %d (HTTPS) (localhost only); API on %d (localhost only).\n", lp.ContainerName, lp.HTTPPort, lp.HTTPSPort, lp.APIPort)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Local proxy '%s' is ready on port %d (localhost only); API on %d (localhost only).\n", lp.ContainerName, lp.HTTPPort, lp.APIPort)
+		}
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "New containers will register as NAME.%s when this proxy is running. Remove the proxy container to stop using it.\n", lp.Hostname)
+	return nil
 }
 
 func init() {
@@ -179,7 +193,7 @@ func init() {
 	configLocalProxyCmd.Flags().String("image", "", "Image tag to build/use for the proxy (default dv-local-proxy)")
 	configLocalProxyCmd.Flags().String("hostname", "", "Base hostname for containers (default dv.localhost, containers become NAME.hostname)")
 	configLocalProxyCmd.Flags().Int("http-port", 0, "Host port that will listen for NAME.dv.localhost requests (defaults to 80)")
-	configLocalProxyCmd.Flags().Bool("https", false, "Enable HTTPS for NAME.dv.localhost using mkcert and redirect HTTP to HTTPS")
+	configLocalProxyCmd.Flags().Bool("https", false, "Enable HTTPS using mkcert and redirect HTTP to HTTPS (preserves current setting when omitted; --https=false disables)")
 	configLocalProxyCmd.Flags().Int("https-port", 0, "Host port that will listen for HTTPS NAME.dv.localhost requests (defaults to 443 when --https is enabled)")
 	configLocalProxyCmd.Flags().Int("api-port", 0, "Host port for the proxy management API")
 	configLocalProxyCmd.Flags().Int("discourse-port", 0, "Port Discourse uses in generated URLs (default: same as --http-port or --https-port)")
@@ -192,6 +206,15 @@ func init() {
 
 func trimFlag(val string) string {
 	return strings.TrimSpace(val)
+}
+
+func localProxyHTTPSFlag(cmd *cobra.Command, current bool) bool {
+	// Rebuilding/recreating a proxy must not implicitly disable its TLS listener.
+	if !cmd.Flags().Changed("https") {
+		return current
+	}
+	enabled, _ := cmd.Flags().GetBool("https")
+	return enabled
 }
 
 func localProxySettingsChanged(prev config.LocalProxyConfig, next config.LocalProxyConfig) bool {

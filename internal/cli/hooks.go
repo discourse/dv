@@ -41,6 +41,7 @@ func startContainerWithPostStartHook(cmd *cobra.Command, cfg config.Config, conf
 	if err := docker.Start(name); err != nil {
 		return err
 	}
+	syncContainerHostnamesBestEffort(cmd, cfg, name)
 	if commandName == "" && cmd != nil {
 		commandName = cmd.Name()
 	}

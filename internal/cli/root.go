@@ -173,6 +173,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	rootCmd.AddCommand(pluginCmd)
 	rootCmd.AddCommand(selectCmd)
 	rootCmd.AddCommand(renameCmd)
+	rootCmd.AddCommand(hostnameCmd)
 	rootCmd.AddCommand(extractCmd)
 	rootCmd.AddCommand(importCmd)
 	rootCmd.AddCommand(configCmd)

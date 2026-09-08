@@ -152,6 +152,9 @@ var newCmd = &cobra.Command{
 		if name == "" {
 			name = autogenName()
 		}
+		if err := checkPrimaryHostname(cfg, name); err != nil {
+			return err
+		}
 		if explicitName {
 			proceed, err := confirmInvalidRailsHostname(cmd, name)
 			if err != nil {
@@ -446,7 +449,7 @@ func sealProvisionedContainer(cmd *cobra.Command, cfg config.Config, name, workd
 	extraHosts := []string{}
 	proxyHost := applyLocalProxyMetadata(cfg, name, lifecycle.HostPort, lifecycle.ContainerPort, labels, envs)
 	if proxyHost != "" {
-		extraHosts = append(extraHosts, fmt.Sprintf("%s:127.0.0.1", proxyHost))
+		extraHosts = append(extraHosts, proxyExtraHosts(cfg, name, proxyHost)...)
 	}
 
 	if err := docker.RunDetached(name, workdir, snapshotImage, lifecycle.HostPort, lifecycle.ContainerPort, labels, envs, extraHosts, "", templateMounts); err != nil {
@@ -474,10 +477,7 @@ func sealProvisionedContainer(cmd *cobra.Command, cfg config.Config, name, workd
 		}
 	}
 
-	if proxyHost != "" {
-		time.Sleep(500 * time.Millisecond)
-		registerWithLocalProxy(cmd, cfg, name, proxyHost, lifecycle.ContainerPort)
-	}
+	syncContainerHostnamesBestEffort(cmd, cfg, name)
 	fmt.Fprintln(cmd.OutOrStdout(), "SSH agent forwarding removed.")
 	return nil
 }

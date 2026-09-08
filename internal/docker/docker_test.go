@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -543,5 +545,60 @@ func TestExecSessionsContextHonorsCancellation(t *testing.T) {
 	_, err := ExecSessionsContext(ctx, "does-not-matter")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ExecSessionsContext error = %v, want context.Canceled", err)
+	}
+}
+
+func TestExecAsRootScriptContextUsesStdin(t *testing.T) {
+	bin := t.TempDir()
+	stub := `#!/bin/sh
+if [ "$*" != 'exec -i --user root -w / agent sh -s' ]; then
+    echo "unexpected argv: $*" >&2
+    exit 1
+fi
+cat
+printf 'stderr-value' >&2
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := "echo caddy\nsv restart .\n"
+	out, err := ExecAsRootScriptContext(context.Background(), "agent", "/", script)
+	if err != nil || out != script+"stderr-value" {
+		t.Fatalf("output = %q, error = %v", out, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ExecAsRootScriptContext(ctx, "agent", "/", script); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation", err)
+	}
+}
+
+func TestContainerLookupTreatsNameAsLiteralData(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	marker := filepath.Join(dir, "injected")
+	t.Setenv("DV_TEST_ARGS_FILE", argsFile)
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DV_TEST_ARGS_FILE\"\necho container\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, name := range []string{"forum.v2", "forum; touch " + marker + "; #"} {
+		for _, lookup := range []func(string) bool{Exists, Running} {
+			if !lookup(name) {
+				t.Fatal("stub container not found")
+			}
+			data, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), "name=^"+regexp.QuoteMeta(name)+"$\n") {
+				t.Fatalf("name was not passed as one literal filter: %s", data)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatal("container name executed through shell")
+			}
+		}
 	}
 }

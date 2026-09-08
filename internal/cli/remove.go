@@ -54,13 +54,17 @@ var removeCmd = &cobra.Command{
 }
 
 func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) error {
-	operationCtx := cmd.Context()
-	if operationCtx == nil {
-		operationCtx = context.Background()
-	}
 	configDir, err := xdg.ConfigDir()
 	if err != nil {
 		return err
+	}
+	return runRemoveInConfig(cmd, args, force, directOutput, configDir)
+}
+
+func runRemoveInConfig(cmd *cobra.Command, args []string, force, directOutput bool, configDir string) error {
+	operationCtx := cmd.Context()
+	if operationCtx == nil {
+		operationCtx = context.Background()
 	}
 	cfg, err := config.LoadOrCreate(configDir)
 	if err != nil {
@@ -78,6 +82,7 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 	removingEnvSelection := os.Getenv("DV_AGENT") == name
 	removingSessionSelection := session.GetCurrentAgent() == name
 	imgForContainer := cfg.ContainerImages[name]
+	proxyAliases := append(append([]string(nil), cfg.HostnameAliases[name]...), cfg.HostnameRemovals[name]...)
 	var proxyHost string
 	if cfg.LocalProxy.Enabled {
 		if labels, err := labelsWithOverrides(name, cfg); err == nil {
@@ -96,7 +101,8 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 
 	containerRemoved := false
 	var removeErr error
-	if removeDockerExists(name) {
+	existed := removeDockerExists(name)
+	if existed {
 		if proceed, err := warnActiveSessions(cmd, name, force); err != nil {
 			return err
 		} else if !proceed {
@@ -108,6 +114,15 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 			return err
 		}
 
+	}
+	// Do not hold the hostname lock while user hooks run. Serialize the
+	// irreversible deletion, config mutation and live cleanup as one operation.
+	unlock, err := acquireHostnameOperationLock(cmd, configDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if existed {
 		fmt.Fprintf(cmd.OutOrStdout(), "Stopping and removing container '%s'...\n", name)
 		if directOutput {
 			// Once confirmed, let removal and config cleanup complete together. Killing
@@ -168,6 +183,10 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 		delete(latest.ContainerImages, name)
 		delete(latest.LabelOverrides, name)
 		delete(latest.CustomWorkdirs, name)
+		queueHostnameRemovals(latest, name, latest.HostnameAliases[name]...)
+		queueHostnameRemovals(latest, name, proxyAliases...)
+		queueHostnameRemovals(latest, name, proxyHost)
+		delete(latest.HostnameAliases, name)
 		if latest.SelectedAgent == name {
 			replacementSelected = true
 			latest.SelectedAgent = replacement
@@ -178,7 +197,10 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 		cfg = *latest
 		return nil
 	}); err != nil {
-		return err
+		if !config.IsProjectionError(err) {
+			return err
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
 	}
 	fallbackSelection := cfg.SelectedAgent
 	if fallbackSelection == "" {
@@ -210,11 +232,17 @@ func runRemove(cmd *cobra.Command, args []string, force, directOutput bool) erro
 		requestShellAgent("")
 	}
 
-	if proxyHost != "" && localproxy.Running(cfg.LocalProxy) {
-		if err := localproxy.RemoveRoute(cfg.LocalProxy, proxyHost); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not remove %s from local proxy: %v\n", proxyHost, err)
+	if len(cfg.HostnameRemovals[name]) > 0 {
+		if localproxy.Running(cfg.LocalProxy) {
+			if err := cleanupHostnameRoutes(configDir, cfg, name); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: proxy cleanup pending for %s: %v (retry dv hostname remove %s HOSTNAME)\n", name, err, name)
+			}
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Proxy cleanup pending for %s; retry dv hostname remove %s HOSTNAME when the proxy is running.\n", name, name)
 		}
 	}
+
+	unlock()
 
 	if containerRemoved {
 		if err := runConfiguredHostHooks(cmd, cfg, hostHookPostRemove, removalHookCtx); err != nil {

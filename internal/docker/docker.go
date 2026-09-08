@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -73,12 +74,12 @@ type BuildOptions struct {
 }
 
 func Exists(name string) bool {
-	out, _ := exec.Command("bash", "-lc", "docker ps -aq -f name=^"+shellEscape(name)+"$").Output()
+	out, _ := exec.Command("docker", "ps", "-aq", "-f", "name=^"+regexp.QuoteMeta(name)+"$").Output()
 	return strings.TrimSpace(string(out)) != ""
 }
 
 func Running(name string) bool {
-	out, _ := exec.Command("bash", "-lc", "docker ps -q -f status=running -f name=^"+shellEscape(name)+"$").Output()
+	out, _ := exec.Command("docker", "ps", "-q", "-f", "status=running", "-f", "name=^"+regexp.QuoteMeta(name)+"$").Output()
 	return strings.TrimSpace(string(out)) != ""
 }
 
@@ -725,6 +726,17 @@ func ExecAsRootContext(ctx context.Context, name, workdir string, envs Envs, arg
 	args = append(args, argv...)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.Output()
+	return string(out), err
+}
+
+// ExecAsRootScriptContext runs a shell script through stdin, keeping its contents
+// out of process command lines. This matters when service shutdown hooks use
+// pkill -f: embedding a script in sh -c can make the updater itself a target.
+// Returns both stdout and stderr combined.
+func ExecAsRootScriptContext(ctx context.Context, name, workdir, script string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "--user", "root", "-w", workdir, name, "sh", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 

@@ -17,12 +17,19 @@ import (
 const currentCopyRulesDefaultsVersion = 3
 
 type Config struct {
-	ImageTag         string            `json:"imageTag"`
-	DefaultContainer string            `json:"defaultContainerName"`
-	Workdir          string            `json:"workdir"`
-	CustomWorkdir    string            `json:"customWorkdir,omitempty"`
-	CustomWorkdirs   map[string]string `json:"customWorkdirs,omitempty"`
-	LocalProxy       LocalProxyConfig  `json:"localProxy,omitempty"`
+	// Snapshots identify untouched routing fields in legacy whole-config saves.
+	loadedHostnameState string
+	loadedLabels        string
+	loadedProxy         *LocalProxyConfig
+
+	ImageTag         string              `json:"imageTag"`
+	DefaultContainer string              `json:"defaultContainerName"`
+	Workdir          string              `json:"workdir"`
+	CustomWorkdir    string              `json:"customWorkdir,omitempty"`
+	CustomWorkdirs   map[string]string   `json:"customWorkdirs,omitempty"`
+	HostnameAliases  map[string][]string `json:"hostnameAliases,omitempty"`
+	HostnameRemovals map[string][]string `json:"hostnameRemovals,omitempty"`
+	LocalProxy       LocalProxyConfig    `json:"localProxy,omitempty"`
 	// HostStartingPort is the first port to try on the host.
 	HostStartingPort    int               `json:"hostStartingPort"`
 	ContainerPort       int               `json:"containerPort"`
@@ -221,6 +228,7 @@ func LoadOrCreate(configDir string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	cfg.recordRoutingSnapshot()
 	return cfg, nil
 }
 
@@ -275,6 +283,7 @@ func loadConfig(configDir string) (Config, bool, error) {
 		cfg.CustomWorkdir = ""
 	}
 	cfg.LocalProxy.ApplyDefaults()
+	cfg.recordRoutingSnapshot()
 	return cfg, true, nil
 }
 
@@ -284,7 +293,24 @@ func Save(configDir string, cfg Config) error {
 		return err
 	}
 	return withConfigLock(configDir, func() error {
-		return saveAtomic(Path(configDir), cfg)
+		latest, exists, err := loadConfig(configDir)
+		if err != nil {
+			return err
+		}
+		// A long-running command saving unrelated settings must not undo newer
+		// aliases, pending removals, primary overrides, or HTTPS settings.
+		if exists && cfg.loadedHostnameState != "" {
+			if hostnameState(cfg) == cfg.loadedHostnameState {
+				cfg.HostnameAliases, cfg.HostnameRemovals = latest.HostnameAliases, latest.HostnameRemovals
+			}
+			if labelsState(cfg) == cfg.loadedLabels {
+				cfg.LabelOverrides = latest.LabelOverrides
+			}
+			if cfg.loadedProxy != nil && cfg.LocalProxy == *cfg.loadedProxy {
+				cfg.LocalProxy = latest.LocalProxy
+			}
+		}
+		return saveRoutingAware(configDir, latest, cfg, !exists)
 	})
 }
 
@@ -296,14 +322,21 @@ func Update(configDir string, mutate func(*Config) error) error {
 		return err
 	}
 	return withConfigLock(configDir, func() error {
-		cfg, _, err := loadConfig(configDir)
+		cfg, exists, err := loadConfig(configDir)
 		if err != nil {
 			return err
 		}
+		previous := aliasesState(cfg)
 		if err := mutate(&cfg); err != nil {
 			return err
 		}
 		cfg.migrateCopyFiles()
+		if exists && previous == aliasesState(cfg) {
+			if _, err := proxyAliasOwners(cfg); err != nil {
+				return err
+			}
+			return saveJSONAtomic(Path(configDir), cfg, 0o600)
+		}
 		return saveAtomic(Path(configDir), cfg)
 	})
 }
@@ -321,8 +354,108 @@ func withConfigLock(configDir string, run func() error) error {
 	return run()
 }
 
+func hostnameState(cfg Config) string {
+	data, _ := json.Marshal(struct {
+		Aliases  map[string][]string `json:"aliases,omitempty"`
+		Removals map[string][]string `json:"removals,omitempty"`
+	}{cfg.HostnameAliases, cfg.HostnameRemovals})
+	return string(data)
+}
+
+func aliasesState(cfg Config) string {
+	data, _ := json.Marshal(cfg.HostnameAliases)
+	return string(data)
+}
+
+func labelsState(cfg Config) string {
+	data, _ := json.Marshal(cfg.LabelOverrides)
+	return string(data)
+}
+
+func (cfg *Config) recordRoutingSnapshot() {
+	cfg.loadedHostnameState = hostnameState(*cfg)
+	cfg.loadedLabels = labelsState(*cfg)
+	proxy := cfg.LocalProxy
+	cfg.loadedProxy = &proxy
+}
+
+func saveRoutingAware(dir string, previous, next Config, forceProjection bool) error {
+	if _, err := proxyAliasOwners(next); err != nil {
+		return err
+	}
+	if !forceProjection && aliasesState(previous) == aliasesState(next) {
+		return saveJSONAtomic(Path(dir), next, 0o600)
+	}
+	return saveAtomic(Path(dir), next)
+}
+
+// ProjectionError means desired configuration is committed, but its derived
+// routing file still needs reconciliation. Irreversible lifecycle cleanup may
+// continue, while explicit hostname commands must report the partial failure.
+type ProjectionError struct{ Err error }
+
+func (e *ProjectionError) Error() string {
+	return fmt.Sprintf("configuration saved, but proxy alias projection failed (retry the operation to reconcile): %v", e.Err)
+}
+func (e *ProjectionError) Unwrap() error { return e.Err }
+func IsProjectionError(err error) bool {
+	var projection *ProjectionError
+	return errors.As(err, &projection)
+}
+
 func saveAtomic(filename string, cfg Config) error {
-	b, err := json.MarshalIndent(cfg, "", "  ")
+	if _, err := proxyAliasOwners(cfg); err != nil {
+		return err
+	}
+	if err := saveJSONAtomic(filename, cfg, 0o600); err != nil {
+		return err
+	}
+	if err := WriteProxyAliases(filepath.Dir(filename), cfg); err != nil {
+		return &ProjectionError{Err: err}
+	}
+	return nil
+}
+
+// PublishProxyAliases reconciles the derived routing file without rewriting config.
+func PublishProxyAliases(configDir string) error {
+	return withConfigLock(configDir, func() error {
+		cfg, _, err := loadConfig(configDir)
+		if err != nil {
+			return err
+		}
+		return WriteProxyAliases(configDir, cfg)
+	})
+}
+
+// WriteProxyAliases publishes only routing ownership, never environment secrets.
+// Mount the directory, not the file, so atomic replacements remain visible.
+func WriteProxyAliases(configDir string, cfg Config) error {
+	dir := filepath.Join(configDir, "proxy-aliases")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	owners, err := proxyAliasOwners(cfg)
+	if err != nil {
+		return err
+	}
+	return saveJSONAtomic(filepath.Join(dir, "aliases.json"), owners, 0o644)
+}
+
+func proxyAliasOwners(cfg Config) (map[string]string, error) {
+	owners := map[string]string{}
+	for container, hosts := range cfg.HostnameAliases {
+		for _, host := range hosts {
+			if owner, exists := owners[host]; exists && owner != container {
+				return nil, fmt.Errorf("hostname %s is assigned to both %s and %s", host, owner, container)
+			}
+			owners[host] = container
+		}
+	}
+	return owners, nil
+}
+
+func saveJSONAtomic(filename string, value any, mode os.FileMode) error {
+	b, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -332,7 +465,7 @@ func saveAtomic(filename string, cfg Config) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -615,7 +748,8 @@ func (c *LocalProxyConfig) ApplyDefaults() {
 	if c.APIPort == 0 {
 		c.APIPort = defaults.APIPort
 	}
-	if strings.TrimSpace(c.Hostname) == "" {
+	c.Hostname = strings.ToLower(strings.Trim(strings.TrimSpace(c.Hostname), "."))
+	if c.Hostname == "" {
 		c.Hostname = defaults.Hostname
 	}
 	// Public defaults to false (private binding) and doesn't need migration.

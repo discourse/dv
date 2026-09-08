@@ -167,6 +167,11 @@ func (d *dockerInspector) InspectContainer(ctx context.Context, containerName st
 }
 
 type routeHealer struct {
+	aliasesFile   string
+	aliasesMu     sync.Mutex
+	aliases       map[string]string
+	aliasesInfo   os.FileInfo
+	aliasError    string
 	table         *proxyTable
 	inspector     containerInspector
 	hostSuffix    string
@@ -244,8 +249,63 @@ func withoutCancel(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
 
+// refreshAliases invalidates cached routes whenever persistent ownership changes.
+// The alias-only file is atomically replaced by dv and survives proxy restarts.
+func (h *routeHealer) refreshAliases() error {
+	if h == nil || h.aliasesFile == "" {
+		return nil
+	}
+	h.aliasesMu.Lock()
+	defer h.aliasesMu.Unlock()
+	info, err := os.Stat(h.aliasesFile)
+	if err == nil && h.aliasesInfo != nil && os.SameFile(info, h.aliasesInfo) && info.ModTime() == h.aliasesInfo.ModTime() && info.Size() == h.aliasesInfo.Size() {
+		h.aliasError = ""
+		return nil
+	}
+	var owners map[string]string
+	if err == nil {
+		var data []byte
+		data, err = os.ReadFile(h.aliasesFile)
+		if err == nil {
+			err = json.Unmarshal(data, &owners)
+		}
+	}
+	if err != nil {
+		message := fmt.Sprintf("read hostname aliases: %v", err)
+		if h.aliasError != message {
+			log.Print(message)
+		}
+		h.aliasError = message
+		return errors.New(message)
+	}
+	h.aliasError = ""
+	h.aliasesInfo = info
+	for host, owner := range h.aliases {
+		if owners[host] != owner {
+			h.table.delete(host)
+		}
+	}
+	for host, owner := range owners {
+		if h.aliases[host] != owner {
+			h.table.delete(host)
+		}
+	}
+	h.aliases = owners
+	return nil
+}
+
+func (h *routeHealer) aliasOwner(host string) string {
+	h.aliasesMu.Lock()
+	defer h.aliasesMu.Unlock()
+	return h.aliases[host]
+}
+
 func (h *routeHealer) healOnce(ctx context.Context, host string) (*url.URL, error) {
 	containerName, ok := containerNameFromHost(host, h.hostSuffix)
+	aliasOwner := h.aliasOwner(host)
+	if aliasOwner != "" {
+		containerName, ok = aliasOwner, true
+	}
 	if !ok {
 		return nil, errHostContainerInvalid
 	}
@@ -281,7 +341,14 @@ func (h *routeHealer) healOnce(ctx context.Context, host string) (*url.URL, erro
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errAutoHealUnavailable, err)
 	}
+	// Do not repopulate a stale route if ownership changed during inspection.
+	h.aliasesMu.Lock()
+	if h.aliases[host] != aliasOwner {
+		h.aliasesMu.Unlock()
+		return nil, errHostContainerInvalid
+	}
 	h.table.set(host, target)
+	h.aliasesMu.Unlock()
 	log.Printf("auto-healed route %s -> %s", host, target)
 	return target, nil
 }
@@ -369,6 +436,12 @@ func (s *proxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An auxiliary alias-file failure must not disable independent primary routes.
+	// Known aliases fail closed until ownership can be refreshed safely.
+	if err := s.healer.refreshAliases(); err != nil && s.healer.aliasOwner(host) != "" {
+		s.writeDiagnostic(w, r, host, diagnosticKindNoRoute, "", err)
+		return
+	}
 	target := s.table.lookup(host)
 	if target == nil {
 		s.dropHappyPathProxy(host)
@@ -710,6 +783,7 @@ func main() {
 
 	table := newProxyTable()
 	healer := newRouteHealer(table, newDockerInspector(dockerSocketPath, autoHealTimeout), hostnameSuffix, autoHealContainerPort, autoHeal, autoHealTimeout)
+	healer.aliasesFile = envOrDefault("PROXY_ALIASES_FILE", "")
 	proxyHandler := newProxyServer(table, healer, diagnosticHTML, hostnameSuffix)
 
 	go func() {
@@ -802,6 +876,14 @@ func apiRouter(table *proxyTable, proxy *proxyServer) http.Handler {
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
+			}
+			// Consume ownership changes before accepting a fresh registration;
+			// otherwise the next request could invalidate this newly installed route.
+			if proxy != nil {
+				if err := proxy.healer.refreshAliases(); err != nil && proxy.healer.aliasOwner(host) != "" {
+					http.Error(w, err.Error(), http.StatusServiceUnavailable)
+					return
+				}
 			}
 			table.set(host, target)
 			log.Printf("registered route %s -> %s", host, target)

@@ -1,11 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"dv/internal/config"
 	"dv/internal/docker"
@@ -33,10 +32,11 @@ func applyLocalProxyMetadata(cfg config.Config, containerName string, hostPort i
 	}
 
 	envs["DISCOURSE_HOSTNAME"] = host
-	envs["RAILS_DEVELOPMENT_HOSTS"] = host
+	hosts := append([]string{host}, cfg.HostnameAliases[containerName]...)
+	envs["RAILS_DEVELOPMENT_HOSTS"] = strings.Join(hosts, ",")
 	envs["DV_LOCAL_PROXY_HOST"] = host
 	envs["DV_LOCAL_PROXY_BASE_HOST"] = lp.Hostname
-	envs["DV_CADDY_HOSTS"] = caddyHostsForLocalProxy(host, lp.Hostname)
+	envs["DV_CADDY_HOSTS"] = caddyHostsForLocalProxy(strings.Join(hosts, ", "), lp.Hostname)
 	envs["DV_LOCAL_PROXY_HTTP_PORT"] = strconv.Itoa(lp.HTTPPort)
 	if lp.HTTPS {
 		envs["DV_LOCAL_PROXY_SCHEME"] = "https"
@@ -79,7 +79,9 @@ func caddyHostsForLocalProxy(host, baseHost string) string {
 		hosts = append(hosts, value)
 	}
 
-	add(host)
+	for _, value := range strings.Split(host, ",") {
+		add(value)
+	}
 	baseHost = strings.TrimSpace(baseHost)
 	if baseHost != "" && strings.TrimPrefix(baseHost, "*.") != "dv.localhost" {
 		add("*." + strings.TrimPrefix(baseHost, "*."))
@@ -88,38 +90,54 @@ func caddyHostsForLocalProxy(host, baseHost string) string {
 	return strings.Join(hosts, ", ")
 }
 
-func registerWithLocalProxy(cmd *cobra.Command, cfg config.Config, containerName string, host string, containerPort int) {
-	if host == "" || containerPort <= 0 || !cfg.LocalProxy.Enabled {
-		return
-	}
-	lp := cfg.LocalProxy
-	lp.ApplyDefaults()
-	if !localproxy.Running(lp) {
-		return
-	}
-	// Get the container's internal IP address to route traffic directly
+// registerProxyRoutes returns errors; lifecycle callers report them as warnings.
+func registerProxyRoutes(cfg config.Config, containerName, host string, containerPort int) error {
 	containerIP, err := docker.ContainerIP(containerName)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Failed to get container IP for %s: %v\n", containerName, err)
-		return
+		return fmt.Errorf("get proxy target for %s: %w", containerName, err)
 	}
 	target := fmt.Sprintf("http://%s:%d", containerIP, containerPort)
-	if err := localproxy.RegisterRoute(lp, host, target); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Failed to register %s at %s: %v\n", host, target, err)
+	var failures []error
+	for _, routeHost := range append([]string{host}, cfg.HostnameAliases[containerName]...) {
+		if err := localproxy.RegisterRoute(cfg.LocalProxy, routeHost, target); err != nil {
+			failures = append(failures, fmt.Errorf("register %s: %w", routeHost, err))
+		}
 	}
+	return errors.Join(failures...)
 }
 
-func registerContainerFromLabels(cmd *cobra.Command, cfg config.Config, name string) {
-	if !cfg.LocalProxy.Enabled {
-		return
-	}
+func registerContainerRoutes(cfg config.Config, name string) error {
 	labels, err := labelsWithOverrides(name, cfg)
 	if err != nil {
-		return
+		return err
 	}
-	host, _, containerPort, _, ok := localproxy.RouteFromLabels(labels)
+	host, _, port, _, ok := localproxy.RouteFromLabels(labels)
 	if !ok {
-		return
+		return fmt.Errorf("container %s has no proxy routing metadata", name)
 	}
-	registerWithLocalProxy(cmd, cfg, name, host, containerPort)
+	return registerProxyRoutes(cfg, name, host, port)
+}
+
+// Prefer the container's recorded primary, including rename overrides. A global
+// suffix change must not silently replace an existing container's identity.
+func containerPrimaryHostname(cfg config.Config, name string) (string, error) {
+	labels, err := labelsWithOverrides(name, cfg)
+	if err != nil {
+		return "", fmt.Errorf("inspect primary hostname for %s: %w", name, err)
+	}
+	if host := strings.TrimSpace(labels[localproxy.LabelHost]); host != "" {
+		return host, nil
+	}
+	return localproxy.HostnameForContainer(name, cfg.LocalProxy.Hostname), nil
+}
+
+func proxyExtraHosts(cfg config.Config, name, primary string) []string {
+	if primary == "" {
+		return nil
+	}
+	hosts := []string{primary + ":127.0.0.1"}
+	for _, alias := range cfg.HostnameAliases[name] {
+		hosts = append(hosts, alias+":127.0.0.1")
+	}
+	return hosts
 }

@@ -450,6 +450,9 @@ func ensureContainerRunning(cmd *cobra.Command, cfg config.Config, name string, 
 
 func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Config, name string, workdir string, imageTag string, imgName string, reset bool, sshAuthSock string, templateEnvs map[string]string, templateMounts []docker.Mount) (containerLifecycleResult, error) {
 	result := containerLifecycleResult{ContainerPort: cfg.ContainerPort, Workdir: workdir}
+	if err := checkPrimaryHostname(cfg, name); err != nil {
+		return result, err
+	}
 	if reset && docker.Exists(name) {
 		_ = docker.Stop(name)
 		_ = docker.Remove(name)
@@ -487,7 +490,7 @@ func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Conf
 		extraHosts := []string{}
 		proxyHost := applyLocalProxyMetadata(cfg, name, chosenPort, cfg.ContainerPort, labels, envs)
 		if proxyHost != "" {
-			extraHosts = append(extraHosts, fmt.Sprintf("%s:127.0.0.1", proxyHost))
+			extraHosts = append(extraHosts, proxyExtraHosts(cfg, name, proxyHost)...)
 		}
 		if err := docker.RunDetached(name, workdir, imageTag, chosenPort, cfg.ContainerPort, labels, envs, extraHosts, sshAuthSock, templateMounts); err != nil {
 			return result, err
@@ -495,9 +498,6 @@ func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Conf
 		result.Created = true
 		result.Started = true
 		result.HostPort = chosenPort
-		if proxyHost != "" {
-			registerWithLocalProxy(cmd, cfg, name, proxyHost, cfg.ContainerPort)
-		}
 	} else if !docker.Running(name) {
 		if err := docker.Start(name); err != nil {
 			return result, err
@@ -506,9 +506,8 @@ func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Conf
 		if hostPort, err := docker.GetContainerHostPort(name, cfg.ContainerPort); err == nil {
 			result.HostPort = hostPort
 		}
-		registerContainerFromLabels(cmd, cfg, name)
 	} else {
-		registerContainerFromLabels(cmd, cfg, name)
 	}
+	syncContainerHostnamesBestEffort(cmd, cfg, name)
 	return result, nil
 }

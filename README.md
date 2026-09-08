@@ -628,6 +628,60 @@ Use `dv config site_settings FILENAME.yaml` to apply Discourse site settings fro
 #### Local proxy (NAME.dv.localhost)
 Run `dv config local-proxy` to build and start a small reverse proxy container (`dv-local-proxy` by default) that maps each new agent to `NAME.dv.localhost` instead of host ports like `localhost:3000`. By default, the proxy listens on localhost only (port 80 for HTTP, 2080 for admin API) for security. Use `--hostname dev.home.arpa` to use `NAME.dev.home.arpa` instead, and use `--public` to bind to all network interfaces. Use `--https` to enable HTTPS on port 443 via a local mkcert certificate (HTTP will redirect to HTTPS). The proxy registers containers as you create/start them and injects hostname env vars so Discourse assets resolve correctly; when `--https` is enabled, new stock Discourse containers also configure their in-container Caddy with the proxy hostname/wildcard and trust Caddy's local CA in Chromium's NSS DB. Stop or remove the proxy container to go back to host-port URLs; only containers created while the proxy is running adopt the hostname.
 
+#### Additional container hostnames
+
+A container can have multiple proxy hostnames, for example for Discourse multisite:
+
+```sh
+# One-time upgrade if your proxy predates hostname alias support:
+# Existing HTTPS settings are preserved.
+dv config local-proxy --rebuild --recreate
+
+dv hostname add forum customers partners
+dv hostname list forum
+# Later:
+dv hostname remove forum partners
+```
+
+With `--hostname dev.home.arpa`, this routes `forum.dev.home.arpa`,
+`customers.dev.home.arpa`, and `partners.dev.home.arpa` to the same container.
+The original request Host is preserved; these are not redirects. The primary
+hostname remains the canonical Discourse hostname and default URL.
+
+Aliases accept a short DNS label or its full `NAME.dev.home.arpa` hostname.
+They are limited to one level under the configured proxy suffix, so your existing
+`*.dev.home.arpa` certificate covers them. Ensure DNS resolves every alias to the
+proxy host (wildcard DNS or individual records). Conflicting primary names and
+aliases are rejected. Remove aliases before changing the proxy hostname suffix.
+
+Aliases persist across container resets and follow container renames; removing a
+container also removes its aliases. The proxy mounts a read-only alias ownership
+file, separate from the main configuration and its secrets, so it can recover
+routes after restarting or after a container's IP changes. Automatic recovery
+requires the proxy's Docker socket access; without it, start the container through
+dv to re-register routes after a proxy restart.
+
+Adding/removing aliases applies settings in place—no container reset or recreation.
+For stock Discourse containers, dv updates host entries and a persistent hostname
+environment file consumed by the existing Rails and Caddy service launchers.
+Running Rails/Caddy services briefly restart to load changed settings; services
+that are stopped stay stopped. Reapplying unchanged settings does not restart them.
+Changes made while the container is stopped are applied the next time dv starts it.
+Custom applications receive proxy routes but must manage their own hostname acceptance.
+Configure your Discourse multisite databases and site hostnames separately; dv only
+supplies routing and hostname acceptance.
+
+Hostname operations are retryable: if a proxy or application update fails after
+saving configuration, rerun the same command. Pending route removals are retained
+until cleanup succeeds. Normal container startup reports hostname-sync failures as
+warnings rather than preventing you from entering the container. An empty managed
+hostname entry may remain after the last alias is removed, so future starts can
+clean up any creation-time host entries Docker restores.
+
+The proxy caches alias ownership and reloads it when the projection changes.
+If that file becomes unavailable, independent primary routes continue working;
+known aliases fail closed until their ownership can be refreshed.
+
 #### Host lifecycle hooks
 Configure host-side lifecycle hooks in `~/.config/dv/config.json` when you need local automation to run after containers are created or started. Hooks run with `/bin/sh -c` on the host (not inside the container), receive `DV_*` environment variables, and are skipped entirely when `DV_NO_HOOKS=1` is set. `dv` also sets `DV_NO_HOOKS=1` inside the hook subprocess so hooks that call `dv` do not recursively trigger more hooks unless they explicitly override it.
 

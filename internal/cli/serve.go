@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -667,11 +668,6 @@ func handleContainerRestart(w http.ResponseWriter, r *http.Request, configDir, n
 }
 
 func handleContainerDelete(w http.ResponseWriter, r *http.Request, configDir, name string) {
-	cfg, err := config.LoadOrCreate(configDir)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	var req struct {
 		RemoveImage bool `json:"remove_image"`
 		Force       bool `json:"force"`
@@ -687,41 +683,17 @@ func handleContainerDelete(w http.ResponseWriter, r *http.Request, configDir, na
 			return
 		}
 	}
-
-	if docker.Exists(name) {
-		if docker.Running(name) {
-			_ = docker.RemoveForce(name)
-		} else {
-			_ = docker.Remove(name)
-		}
+	var warnings bytes.Buffer
+	cmd := newHostHookCommand("serve", strings.NewReader(""), io.Discard, &warnings)
+	cmd.SetContext(r.Context())
+	cmd.Flags().Bool("image", req.RemoveImage, "")
+	// Session checks were performed above; use the shared lifecycle so aliases,
+	// ownership overrides, hook failures and retry journals cannot diverge.
+	if err := runRemoveInConfig(cmd, []string{name}, true, true, configDir); err != nil {
+		writeJSON(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-
-	if req.RemoveImage {
-		imageTag := ""
-		if imgName := cfg.ContainerImages[name]; imgName != "" {
-			if imgCfg, ok := cfg.Images[imgName]; ok {
-				imageTag = imgCfg.Tag
-			}
-		} else {
-			imageTag, _ = containerImage(name)
-		}
-		if imageTag != "" {
-			_ = docker.RemoveImage(imageTag)
-		}
-	}
-
-	if cfg.ContainerImages != nil {
-		delete(cfg.ContainerImages, name)
-	}
-	if cfg.CustomWorkdirs != nil {
-		delete(cfg.CustomWorkdirs, name)
-	}
-	if cfg.SelectedAgent == name {
-		cfg.SelectedAgent = ""
-	}
-	_ = config.Save(configDir, cfg)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"warnings": warnings.String()})
 }
 
 func handleContainerSelect(w http.ResponseWriter, r *http.Request, configDir, name string) {
@@ -751,32 +723,14 @@ func handleContainerRename(w http.ResponseWriter, r *http.Request, configDir, na
 		writeJSON(w, http.StatusBadRequest, "new_name required")
 		return
 	}
-	if err := docker.Rename(name, newName); err != nil {
+	var warnings bytes.Buffer
+	cmd := newHostHookCommand("serve", strings.NewReader(""), io.Discard, &warnings)
+	cmd.SetContext(r.Context())
+	if err := runRenameInConfig(cmd, name, newName, configDir); err != nil {
 		writeJSON(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	cfg, err := config.LoadOrCreate(configDir)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if cfg.SelectedAgent == name {
-		cfg.SelectedAgent = newName
-	}
-	if cfg.ContainerImages != nil {
-		if img, ok := cfg.ContainerImages[name]; ok {
-			delete(cfg.ContainerImages, name)
-			cfg.ContainerImages[newName] = img
-		}
-	}
-	if cfg.CustomWorkdirs != nil {
-		if wdir, ok := cfg.CustomWorkdirs[name]; ok {
-			delete(cfg.CustomWorkdirs, name)
-			cfg.CustomWorkdirs[newName] = wdir
-		}
-	}
-	_ = config.Save(configDir, cfg)
-	writeJSON(w, http.StatusOK, map[string]interface{}{})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"warnings": warnings.String()})
 }
 
 func handleContainerRun(w http.ResponseWriter, r *http.Request, configDir, name string) {

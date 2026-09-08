@@ -9,6 +9,7 @@ import (
 
 	"dv/internal/config"
 	"dv/internal/docker"
+	"dv/internal/localproxy"
 	"dv/internal/xdg"
 )
 
@@ -46,6 +47,10 @@ var startCmd = &cobra.Command{
 		imageOverride, _ := cmd.Flags().GetString("image")
 		if name == "" {
 			name = currentAgentName(cfg)
+		}
+
+		if err := checkPrimaryHostname(cfg, name); err != nil {
+			return err
 		}
 
 		hostPort, _ := cmd.Flags().GetInt("host-starting-port")
@@ -113,7 +118,7 @@ var startCmd = &cobra.Command{
 			extraHosts := []string{}
 			proxyHost := applyLocalProxyMetadata(cfg, name, chosenPort, containerPort, labels, envs)
 			if proxyHost != "" {
-				extraHosts = append(extraHosts, fmt.Sprintf("%s:127.0.0.1", proxyHost))
+				extraHosts = append(extraHosts, proxyExtraHosts(cfg, name, proxyHost)...)
 			}
 			if err := docker.RunDetached(name, workdir, imageTag, chosenPort, containerPort, labels, envs, extraHosts, "", nil); err != nil {
 				return err
@@ -125,10 +130,6 @@ var startCmd = &cobra.Command{
 
 			// give it a moment to boot services
 			time.Sleep(500 * time.Millisecond)
-
-			if proxyHost != "" {
-				registerWithLocalProxy(cmd, cfg, name, proxyHost, containerPort)
-			}
 		} else if !docker.Running(name) {
 			// Check if container's port is available before starting
 			existingPort, portErr := docker.GetContainerHostPort(name, containerPort)
@@ -188,10 +189,10 @@ var startCmd = &cobra.Command{
 					// existing bind mounts (the snapshot bakes the filesystem but
 					// not mount specs) so a mounted plugin isn't silently dropped.
 					fmt.Fprintf(cmd.OutOrStdout(), "Recreating container with new port...\n")
-					if err := docker.RunDetached(name, existingWorkdir, tempImage, newPort, containerPort, labels, existingEnvs, nil, "", existingMounts); err != nil {
+					if err := docker.RunDetached(name, existingWorkdir, tempImage, newPort, containerPort, labels, existingEnvs, proxyExtraHosts(cfg, name, labels[localproxy.LabelHost]), "", existingMounts); err != nil {
 						// Try to restore from snapshot
 						fmt.Fprintf(cmd.ErrOrStderr(), "Failed to recreate, attempting restore...\n")
-						_ = docker.RunDetached(name, existingWorkdir, tempImage, existingPort, containerPort, labels, existingEnvs, nil, "", existingMounts)
+						_ = docker.RunDetached(name, existingWorkdir, tempImage, existingPort, containerPort, labels, existingEnvs, proxyExtraHosts(cfg, name, labels[localproxy.LabelHost]), "", existingMounts)
 						_ = docker.RemoveImage(tempImage)
 						return fmt.Errorf("failed to recreate container: %w", err)
 					}
@@ -203,12 +204,6 @@ var startCmd = &cobra.Command{
 					// Clean up snapshot image (force+quiet since new container references it)
 					_ = docker.RemoveImageQuiet(tempImage)
 
-					// Update proxy registration if needed
-					proxyHost := applyLocalProxyMetadata(cfg, name, newPort, containerPort, labels, existingEnvs)
-					time.Sleep(500 * time.Millisecond)
-					if proxyHost != "" {
-						registerWithLocalProxy(cmd, cfg, name, proxyHost, containerPort)
-					}
 				} else {
 					// Port is free, start normally
 					fmt.Fprintf(cmd.OutOrStdout(), "Starting existing container '%s'...\n", name)
@@ -226,10 +221,8 @@ var startCmd = &cobra.Command{
 				}
 				startedContainer = true
 			}
-			registerContainerFromLabels(cmd, cfg, name)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Container '%s' is already running.\n", name)
-			registerContainerFromLabels(cmd, cfg, name)
 		}
 
 		// Remember container->image association
@@ -241,8 +234,22 @@ var startCmd = &cobra.Command{
 			overridesDirty = true
 		}
 		if overridesDirty {
-			_ = config.Save(configDir, cfg)
+			if err := config.Update(configDir, func(latest *config.Config) error {
+				if latest.ContainerImages == nil {
+					latest.ContainerImages = map[string]string{}
+				}
+				latest.ContainerImages[name] = imgName
+				if reset || createdContainer {
+					delete(latest.LabelOverrides, name)
+				}
+				cfg = *latest
+				return nil
+			}); err != nil {
+				return err
+			}
 		}
+
+		syncContainerHostnamesBestEffort(cmd, cfg, name)
 
 		hookCtx := hostHookContext{
 			CommandName:   "start",
