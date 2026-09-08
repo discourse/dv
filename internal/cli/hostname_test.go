@@ -35,7 +35,7 @@ func TestAliasConflicts(t *testing.T) {
 	cfg.ContainerImages["other_agent"] = "discourse"
 	cfg.HostnameAliases = map[string][]string{"forum": {"customers.dev.home.arpa"}}
 	for _, host := range []string{"other-agent.dev.home.arpa", "customers.dev.home.arpa", "forum.dev.home.arpa", "external.dev.home.arpa"} {
-		if err := validateAliasOwner(cfg, "another", host, []string{"forum", "external"}); err == nil {
+		if err := validateAliasOwner(cfg, "another", host, []string{"forum", "external", "other_agent"}); err == nil {
 			t.Errorf("accepted conflicting %s", host)
 		}
 	}
@@ -47,13 +47,33 @@ func TestAliasConflicts(t *testing.T) {
 	}
 }
 
+func TestAliasIgnoresStaleContainerPreferences(t *testing.T) {
+	cfg := config.Default()
+	cfg.LocalProxy.Enabled = true
+	cfg.LocalProxy.Hostname = "dev.home.arpa"
+	cfg.ContainerImages["blog"] = "discourse"
+	cfg.DefaultContainer = "blog"
+	cfg.SelectedAgent = "blog"
+	if err := validateAliasOwner(cfg, "blog-discuss", "blog.dev.home.arpa", []string{"blog-discuss"}); err != nil {
+		t.Fatalf("stale preferences reserved hostname: %v", err)
+	}
+	if err := validateAliasOwner(cfg, "blog-discuss", "blog.dev.home.arpa", []string{"blog-discuss", "blog"}); err == nil {
+		t.Fatal("allowed alias to steal existing container's primary")
+	}
+	cfg.HostnameAliases = map[string][]string{"blog": {}}
+	if err := validateAliasOwner(cfg, "blog-discuss", "blog.dev.home.arpa", []string{"blog-discuss"}); err == nil {
+		t.Fatal("ignored explicit routing reservation")
+	}
+}
+
 func TestHostnameCommands(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	bin := t.TempDir()
 	script := `#!/bin/sh
 case "$1" in
 inspect) case "$*" in *forum*) echo '{"com.dv.local-proxy.host":"forum.dev.home.arpa"}';; *) exit 1;; esac;;
-ps) case "$*" in *dv-local-proxy*) exit 0;; *) echo forum;; esac;;
+ps) if [ "$DV_TEST_FAIL_INVENTORY" = 1 ]; then echo customers; exit 1; fi
+case "$*" in *dv-local-proxy*) exit 0;; *) echo forum;; esac;;
 exec) cat >/dev/null; exit 0;;
 *) exit 1;;
 esac
@@ -77,6 +97,22 @@ esac
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
+	t.Setenv("DV_TEST_FAIL_INVENTORY", "1")
+	if err := runHostname(cmd, "add", []string{"forum", "customers"}); err == nil || !strings.Contains(err.Error(), "check hostname conflicts") {
+		t.Fatalf("inventory failure did not fail closed: %v", err)
+	}
+	cfg, err = config.LoadOrCreate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.HostnameAliases) != 0 {
+		t.Fatal("inventory failure mutated aliases")
+	}
+	t.Setenv("DV_TEST_FAIL_INVENTORY", "0")
+	cfg.ContainerImages["customers"] = "discourse"
+	if err := config.Save(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
 	for _, action := range []string{"add", "add", "list"} {
 		args := []string{"forum", "customers", "partners"}
 		if action == "list" {

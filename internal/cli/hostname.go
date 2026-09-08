@@ -84,11 +84,10 @@ func checkPrimaryHostname(cfg config.Config, name string) error {
 }
 
 func validateAliasOwner(cfg config.Config, name, host string, names []string) error {
-	names = append(slices.Clone(names), name, cfg.DefaultContainer, cfg.SelectedAgent)
+	// Only Docker inventory and explicit routing state establish ownership.
+	// Image history and default/selected names can outlive deleted containers.
+	names = append(slices.Clone(names), name)
 	for n := range cfg.HostnameAliases {
-		names = append(names, n)
-	}
-	for n := range cfg.ContainerImages {
 		names = append(names, n)
 	}
 	for _, n := range names {
