@@ -108,6 +108,12 @@ type AgentConfig struct {
 	PromptArgs []string `json:"promptArgs,omitempty"`
 	// InteractiveArgs are appended for interactive runs without a prompt.
 	InteractiveArgs []string `json:"interactiveArgs,omitempty"`
+	// Defaults overrides the built-in default flags injected after the command
+	// for built-in agents (claude, codex, grok, etc.). Only takes effect when
+	// Command, Args, PromptArgs, and InteractiveArgs are all unset (i.e. the
+	// entry is a defaults-only override, not a full custom agent definition).
+	// Use an empty array to clear all built-in defaults.
+	Defaults *[]string `json:"defaults,omitempty"`
 	// Env entries are passed through/assigned like EnvPassthrough entries.
 	Env []string `json:"env,omitempty"`
 	// Install is an optional shell command used to install the agent in a container.
