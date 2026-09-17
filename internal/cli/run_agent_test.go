@@ -7,6 +7,17 @@ import (
 	"dv/internal/config"
 )
 
+func init() {
+	// Register my-agent as a built-in rule so tests can exercise the
+	// defaults-only config override path without coupling to a real agent's flags.
+	agentRules["my-agent"] = agentRule{
+		interactive: func() []string { return []string{"my-agent"} },
+		withPrompt:  func(p string) []string { return []string{"my-agent", "-p", p} },
+		defaults:    []string{"--default-flag"},
+	}
+	agentAliasMap["my-agent"] = "my-agent"
+}
+
 func TestBuildAgentArgsCodexIncludesSearchBeforeExec(t *testing.T) {
 	args := buildAgentArgs("codex", "abc")
 	if len(args) < 4 {
@@ -134,6 +145,56 @@ func TestBuildCustomAgentArgs(t *testing.T) {
 		if rawArgs[i] != wantRaw[i] {
 			t.Fatalf("expected %v, got %v", wantRaw, rawArgs)
 		}
+	}
+}
+
+func TestBuiltinAgentConfigDefaultsOverride(t *testing.T) {
+	overrideDefaults := []string{"--other-flag"}
+	cfg := config.Config{Agents: map[string]config.AgentConfig{
+		"my-agent": {
+			Defaults: &overrideDefaults,
+		},
+	}}
+
+	args := buildAgentArgsWithConfig(cfg, "my-agent", "hello")
+	want := []string{"my-agent", "--other-flag", "-p", "hello"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+
+	interactive := buildAgentInteractiveWithConfig(cfg, "my-agent")
+	wantInteractive := []string{"my-agent", "--other-flag"}
+	if !slices.Equal(interactive, wantInteractive) {
+		t.Fatalf("interactive = %#v, want %#v", interactive, wantInteractive)
+	}
+}
+
+func TestBuiltinAgentConfigDefaultsClear(t *testing.T) {
+	empty := []string{}
+	cfg := config.Config{Agents: map[string]config.AgentConfig{
+		"my-agent": {
+			Defaults: &empty,
+		},
+	}}
+
+	args := buildAgentArgsWithConfig(cfg, "my-agent", "hello")
+	want := []string{"my-agent", "-p", "hello"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestBuiltinAgentConfigDefaultsNotSetUsesBuiltin(t *testing.T) {
+	cfg := config.Config{Agents: map[string]config.AgentConfig{
+		"my-agent": {
+			Env: []string{"MY_VAR"},
+		},
+	}}
+
+	args := buildAgentArgsWithConfig(cfg, "my-agent", "hello")
+	want := buildAgentArgs("my-agent", "hello")
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", want, args)
 	}
 }
 

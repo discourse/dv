@@ -261,6 +261,20 @@ BYO agents can be configured in `~/.config/dv/config.json`:
 
 Then run `dv ra my-agent Fix the bug` or `dv ra ma`. If `install`/`update` is configured, `dv update agent my-agent` runs `update` (falling back to `install` when `update` is omitted), and `dv update agents` includes it.
 
+To override the default flags injected for a built-in agent, add an entry with only `defaults` set (no `command`, `args`, etc.):
+
+```json
+{
+  "agents": {
+    "claude": {
+      "defaults": ["--dangerously-skip-permissions", "--model", "sonnet", "--effort", "high"]
+    }
+  }
+}
+```
+
+Use an empty array to clear all built-in defaults: `"defaults": []`. When `command`, `args`, `promptArgs`, or `interactiveArgs` are present the entry is treated as a full custom agent and `defaults` is ignored.
+
 Notes:
 - Autocompletes bundled agents plus configured BYO agents and aliases: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `droid`, `vibe`, `grok`, `agy` (`antigravity`), `term-llm` (`tl`).
 - Running `agy` automatically copies the host's `~/.gemini/antigravity-cli/antigravity-oauth-token` into the container when present, so an existing Google Antigravity login can be reused.

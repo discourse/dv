@@ -285,6 +285,17 @@ func buildAgentArgs(agent string, prompt string) []string {
 
 func buildAgentArgsWithConfig(cfg config.Config, agent string, prompt string) []string {
 	if custom, ok := customAgentConfig(cfg, agent); ok {
+		if rule, isBuiltin := agentRules[strings.ToLower(agent)]; isBuiltin && isDefaultsOnlyConfig(custom) {
+			base := rule.withPrompt(prompt)
+			defaults := rule.defaults
+			if custom.Defaults != nil {
+				defaults = *custom.Defaults
+			}
+			if len(defaults) > 0 {
+				base = injectDefaults(base, defaults)
+			}
+			return base
+		}
 		return buildCustomAgentArgs(agent, custom, prompt)
 	}
 	if rule, ok := agentRules[strings.ToLower(agent)]; ok {
@@ -303,6 +314,21 @@ func buildAgentInteractive(agent string) []string {
 
 func buildAgentInteractiveWithConfig(cfg config.Config, agent string) []string {
 	if custom, ok := customAgentConfig(cfg, agent); ok {
+		if rule, isBuiltin := agentRules[strings.ToLower(agent)]; isBuiltin && isDefaultsOnlyConfig(custom) {
+			baseBuilder := rule.withoutPrompt
+			if baseBuilder == nil {
+				baseBuilder = rule.interactive
+			}
+			base := baseBuilder()
+			defaults := rule.defaults
+			if custom.Defaults != nil {
+				defaults = *custom.Defaults
+			}
+			if len(defaults) > 0 {
+				base = injectDefaults(base, defaults)
+			}
+			return base
+		}
 		cmd := custom.Command
 		if strings.TrimSpace(cmd) == "" {
 			cmd = agent
@@ -505,6 +531,14 @@ func agentCompletionNames(cfg config.Config) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// isDefaultsOnlyConfig reports whether a config entry only overrides defaults,
+// with no Command/Args/PromptArgs/InteractiveArgs that would constitute a full
+// custom agent definition. Such entries are applied on top of the built-in rule
+// rather than replacing it entirely.
+func isDefaultsOnlyConfig(c config.AgentConfig) bool {
+	return c.Command == "" && len(c.Args) == 0 && len(c.PromptArgs) == 0 && len(c.InteractiveArgs) == 0
 }
 
 func customAgentConfig(cfg config.Config, agent string) (config.AgentConfig, bool) {
