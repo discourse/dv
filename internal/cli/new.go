@@ -630,10 +630,14 @@ func buildMaintenanceScript(withoutTestDB bool) string {
 func executeTemplate(cmd *cobra.Command, cfg config.Config, name, workdir string, tpl *templateConfig, sshForwardMode sshForwardMode, sshAuthSock string, verbose bool, withoutTestDB bool) (err error) {
 	// 1. Env variables
 	envList := collectEnvPassthrough(cfg)
+	templateVars := buildTemplateVars(cfg, name)
+	for k, v := range templateVars {
+		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	}
 	if len(tpl.Env) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Setting environment variables...\n")
 		for k, v := range tpl.Env {
-			envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+			envList = append(envList, fmt.Sprintf("%s=%s", k, interpolateVars(v, templateVars)))
 		}
 	}
 

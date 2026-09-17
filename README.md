@@ -432,6 +432,31 @@ Templates support:
 - **Provisioning**: Run arbitrary bash commands inside the container via `on_create`.
 - **MCP Servers**: Register Model Context Protocol servers for AI agents.
 
+#### Template variable interpolation
+
+`env:` values support `${VAR}` interpolation with a set of reserved variables computed from the container's runtime configuration:
+
+| Variable | Description |
+|---|---|
+| `DISCOURSE_URL` | Full base URL, e.g. `https://myagent.dv.localhost` or `http://localhost:3000` |
+| `DISCOURSE_HOSTNAME` | Hostname only, e.g. `myagent.dv.localhost` or `localhost` |
+| `DISCOURSE_PORT` | External port number |
+| `DISCOURSE_SCHEME` | `https` or `http` |
+
+`DISCOURSE_URL` omits the port when it is the default for the scheme (80 for HTTP, 443 for HTTPS).
+
+Unknown `${VAR}` references are left unchanged. Bare `$VAR` references are never expanded.
+
+All variables are also automatically injected into the container environment.
+
+Example:
+
+```yaml
+env:
+  APP_BASE_URL: ${DISCOURSE_URL}
+  OAUTH_REDIRECT: ${DISCOURSE_URL}/auth/callback
+```
+
 #### SSH agent forwarding
 
 Private repositories can use the host SSH agent during provisioning:
