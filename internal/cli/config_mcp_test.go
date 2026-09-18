@@ -3,8 +3,6 @@ package cli
 import "testing"
 
 func TestHasClaudeHostCredentials(t *testing.T) {
-	t.Parallel()
-
 	t.Run("no credentials", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "")
 		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
