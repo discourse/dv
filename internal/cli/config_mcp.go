@@ -67,8 +67,8 @@ var configMcpCmd = &cobra.Command{
 
 		// Prepare env pass-through so tools like 'claude' have credentials
 		envs := collectEnvPassthrough(cfg)
-		if _, ok := os.LookupEnv("ANTHROPIC_API_KEY"); !ok {
-			fmt.Fprintln(cmd.ErrOrStderr(), "Warning: ANTHROPIC_API_KEY is not set on host; 'claude' may fail.")
+		if !hasClaudeHostCredentials() {
+			fmt.Fprintln(cmd.ErrOrStderr(), "Warning: neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set on host; 'claude' may fail.")
 		}
 
 		switch mcpName {
@@ -87,6 +87,16 @@ var configMcpCmd = &cobra.Command{
 func init() {
 	configMcpCmd.Flags().String("name", "", "Container name (defaults to selected or default)")
 	configCmd.AddCommand(configMcpCmd)
+}
+
+func hasClaudeHostCredentials() bool {
+	if _, ok := os.LookupEnv("ANTHROPIC_API_KEY"); ok {
+		return true
+	}
+	if _, ok := os.LookupEnv("CLAUDE_CODE_OAUTH_TOKEN"); ok {
+		return true
+	}
+	return false
 }
 
 // addOrReplaceTomlSection inserts or replaces a TOML table section defined by sectionHeader

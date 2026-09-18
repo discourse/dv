@@ -871,6 +871,9 @@ func TestDefaultIncludesGrokEnvAndCopyRules(t *testing.T) {
 	t.Parallel()
 
 	cfg := Default()
+	if !containsString(cfg.EnvPassthrough, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatal("expected CLAUDE_CODE_OAUTH_TOKEN in default env passthrough")
+	}
 	if !containsString(cfg.EnvPassthrough, "XAI_API_KEY") {
 		t.Fatal("expected XAI_API_KEY in default env passthrough")
 	}

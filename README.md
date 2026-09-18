@@ -960,6 +960,7 @@ Automatically passed through when set on the host:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 - `AWS_REGION`
+- `CLAUDE_CODE_OAUTH_TOKEN`
 - `CLAUDE_CODE_USE_BEDROCK`
 - `DEEPSEEK_API_KEY`
 - `GEMINI_API_KEY`
