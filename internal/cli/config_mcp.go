@@ -90,10 +90,10 @@ func init() {
 }
 
 func hasClaudeHostCredentials() bool {
-	if _, ok := os.LookupEnv("ANTHROPIC_API_KEY"); ok {
+	if strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != "" {
 		return true
 	}
-	if _, ok := os.LookupEnv("CLAUDE_CODE_OAUTH_TOKEN"); ok {
+	if strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")) != "" {
 		return true
 	}
 	return false
