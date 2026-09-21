@@ -20,7 +20,6 @@ RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://antigravity.google/cl
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsS https://cursor.com/install | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'
-RUN sudo -H -u discourse /bin/bash -lc 'curl -LsSf https://mistral.ai/vibe/install.sh | bash'
 RUN sudo -H -u discourse /bin/bash -lc 'curl -fsSL https://raw.githubusercontent.com/samsaffron/term-llm/main/install.sh | sh'
 
 RUN tee /tmp/seed_users.rb > /dev/null <<'EOF'

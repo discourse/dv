@@ -276,7 +276,7 @@ To override the default flags injected for a built-in agent, add an entry with o
 Use an empty array to clear all built-in defaults: `"defaults": []`. When `command`, `args`, `promptArgs`, or `interactiveArgs` are present the entry is treated as a full custom agent and `defaults` is ignored.
 
 Notes:
-- Autocompletes bundled agents plus configured BYO agents and aliases: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `droid`, `vibe`, `grok`, `agy` (`antigravity`), `term-llm` (`tl`).
+- Autocompletes bundled agents plus configured BYO agents and aliases: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `droid`, `grok`, `agy` (`antigravity`), `term-llm` (`tl`).
 - Running `agy` automatically copies the host's `~/.gemini/antigravity-cli/antigravity-oauth-token` into the container when present, so an existing Google Antigravity login can be reused.
 - If no prompt is provided, an inline TUI opens for multi-line input (Ctrl+D to run, Esc to cancel).
 - You can pass a regular file path as the first argument after the agent (e.g. `dv ra codex ./plan.md`). The file will be read on the host and its contents used as the prompt. If the argument is not a file, the existing prompt behavior is used.
@@ -343,7 +343,7 @@ dv update agent codex --name my-container
 Notes:
 - Starts the container if needed before running updates.
 - Re-runs the official install scripts or package managers to pull the latest versions.
-- Supported single-agent names include `codex`, `copilot`, `opencode`, `claude`, `cursor`, `droid`, `vibe`, `agy` (`antigravity`), `term-llm`, and configured BYO agents with an `update` or `install` command.
+- Supported single-agent names include `codex`, `copilot`, `opencode`, `claude`, `cursor`, `droid`, `agy` (`antigravity`), `term-llm`, and configured BYO agents with an `update` or `install` command.
 
 ### dv remove
 Remove the container and optionally the image.
