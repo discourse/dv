@@ -536,13 +536,15 @@ git fetch origin "$_branch" --tags --prune --force
 git checkout -B "$_branch" "origin/$_branch"
 git reset --hard "origin/$_branch"
 %s
-`, shellQuote(branchName), strings.Join(buildAssetsClobberCommands(), "\n"))
+%s
+`, shellQuote(branchName), strings.Join(buildSchemaCacheClearCommands(), "\n"), strings.Join(buildAssetsClobberCommands(), "\n"))
 	return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 }
 
 func checkoutBranch(cmd *cobra.Command, cfg config.Config, name, workdir, branchName string, envs docker.Envs, withoutTestDB bool) error {
 	if branchName == "main" || branchName == "master" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s branch...\n", branchName)
+		schemaClearCmds := strings.Join(buildSchemaCacheClearCommands(), "\n")
 		assetClobberCmds := strings.Join(buildAssetsClobberCommands(), "\n")
 		script := fmt.Sprintf(`
 set -e
@@ -552,7 +554,8 @@ git checkout %s > /tmp/dv-git-checkout.log 2>&1
 echo "Pulling latest..."
 git pull > /tmp/dv-git-pull.log 2>&1
 %s
-`, branchName, branchName, assetClobberCmds)
+%s
+`, branchName, branchName, schemaClearCmds, assetClobberCmds)
 		return docker.ExecInteractive(name, workdir, envs, []string{"bash", "-lc", script})
 	}
 	checkoutCmds := buildBranchCheckoutCommands(branchName)

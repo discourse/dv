@@ -62,6 +62,18 @@ func buildAssetsClobberCommands() []string {
 	)
 }
 
+// buildSchemaCacheClearCommands generates commands to remove any cached schema
+// YAML files after a branch switch. The cache is tied to a specific schema
+// version; leaving it in place after switching branches causes Rails to
+// misread column types (e.g. boolean instead of integer defaults), which
+// crashes boot before assets:clobber or migrations can run.
+func buildSchemaCacheClearCommands() []string {
+	return []string{
+		"echo 'Clearing stale schema cache...'",
+		"find . -name 'schema_cache.yml*' -delete 2>/dev/null || true",
+	}
+}
+
 // buildDatabaseDropCreateMigrateCommands generates commands to drop, create, and migrate databases.
 // When skipDBReset is true, db:drop and db:create are omitted, as well as user seeding.
 // Only migrations and later steps run.
@@ -167,6 +179,9 @@ func buildDiscourseResetScript(checkoutCmds []string, opts discourseResetScriptO
 
 	// Post-checkout steps
 	lines = append(lines, buildPostCheckoutCommands()...)
+
+	// Schema cache must be cleared before Rails boots on the new branch
+	lines = append(lines, buildSchemaCacheClearCommands()...)
 
 	// Rails asset cleanup
 	lines = append(lines, buildAssetsClobberCommands()...)
