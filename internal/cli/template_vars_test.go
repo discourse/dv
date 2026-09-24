@@ -101,6 +101,124 @@ func TestResolveDiscourseAccess(t *testing.T) {
 	})
 }
 
+func TestBuildTemplateVarsFromEnvs(t *testing.T) {
+	cases := []struct {
+		name       string
+		envs       map[string]string
+		wantURL    string
+		wantScheme string
+		wantHost   string
+		wantPort   string
+	}{
+		{
+			name: "proxy http port 80 omits port from URL",
+			envs: map[string]string{
+				"DISCOURSE_HOSTNAME":    "blizzard.dv.localhost",
+				"DISCOURSE_PORT":        "80",
+				"DV_LOCAL_PROXY_SCHEME": "http",
+			},
+			wantURL:    "http://blizzard.dv.localhost",
+			wantScheme: "http",
+			wantHost:   "blizzard.dv.localhost",
+			wantPort:   "80",
+		},
+		{
+			name: "proxy https port 443 omits port from URL",
+			envs: map[string]string{
+				"DISCOURSE_HOSTNAME":    "blizzard.dv.localhost",
+				"DISCOURSE_PORT":        "443",
+				"DV_LOCAL_PROXY_SCHEME": "https",
+			},
+			wantURL:    "https://blizzard.dv.localhost",
+			wantScheme: "https",
+			wantHost:   "blizzard.dv.localhost",
+			wantPort:   "443",
+		},
+		{
+			name: "non-standard port included in URL",
+			envs: map[string]string{
+				"DISCOURSE_HOSTNAME":    "blizzard.dv.localhost",
+				"DISCOURSE_PORT":        "9292",
+				"DV_LOCAL_PROXY_SCHEME": "http",
+			},
+			wantURL:    "http://blizzard.dv.localhost:9292",
+			wantScheme: "http",
+			wantHost:   "blizzard.dv.localhost",
+			wantPort:   "9292",
+		},
+		{
+			name:       "no proxy falls back to localhost:3000",
+			envs:       map[string]string{},
+			wantURL:    "http://localhost:3000",
+			wantScheme: "http",
+			wantHost:   "localhost",
+			wantPort:   "",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vars := buildTemplateVarsFromEnvs(c.envs)
+			if got := vars["DISCOURSE_URL"]; got != c.wantURL {
+				t.Errorf("DISCOURSE_URL = %q, want %q", got, c.wantURL)
+			}
+			if got := vars["DISCOURSE_SCHEME"]; got != c.wantScheme {
+				t.Errorf("DISCOURSE_SCHEME = %q, want %q", got, c.wantScheme)
+			}
+			if got := vars["DISCOURSE_HOSTNAME"]; got != c.wantHost {
+				t.Errorf("DISCOURSE_HOSTNAME = %q, want %q", got, c.wantHost)
+			}
+			if c.wantPort != "" {
+				if got := vars["DISCOURSE_PORT"]; got != c.wantPort {
+					t.Errorf("DISCOURSE_PORT = %q, want %q", got, c.wantPort)
+				}
+			}
+		})
+	}
+}
+
+// TestSealEnvInterpolation covers the regression where template env values
+// containing ${DISCOURSE_URL} were passed raw to docker run because
+// interpolation only happened in executeTemplate (docker exec), not in
+// sealProvisionedContainer or ensureContainerRunningWithWorkdirResult (docker run).
+func TestSealEnvInterpolation(t *testing.T) {
+	// Simulate envs after applyLocalProxyMetadata has run with a proxy active.
+	envs := map[string]string{
+		"DISCOURSE_HOSTNAME":    "blizzard-wow.dv.localhost",
+		"DISCOURSE_PORT":        "443",
+		"DV_LOCAL_PROXY_SCHEME": "https",
+	}
+
+	templateEnvs := map[string]string{
+		"DISCOURSE_BNET_AUTHORIZE_URL":        "${DISCOURSE_URL}/oauth/authorize",
+		"DISCOURSE_BLIZZARD_ORCHESTRATION_URL": "${DISCOURSE_URL}/oauth",
+		"DISCOURSE_BNET_TOKEN_URL":            "http://127.0.0.1:3000/oauth/token",
+		"DISCOURSE_BNET_API_URL":              "http://127.0.0.1:3000",
+	}
+	for k, v := range templateEnvs {
+		envs[k] = v
+	}
+
+	tvars := buildTemplateVarsFromEnvs(envs)
+	for k := range templateEnvs {
+		if v, ok := envs[k]; ok {
+			envs[k] = interpolateVars(v, tvars)
+		}
+	}
+
+	want := map[string]string{
+		"DISCOURSE_BNET_AUTHORIZE_URL":        "https://blizzard-wow.dv.localhost/oauth/authorize",
+		"DISCOURSE_BLIZZARD_ORCHESTRATION_URL": "https://blizzard-wow.dv.localhost/oauth",
+		"DISCOURSE_BNET_TOKEN_URL":            "http://127.0.0.1:3000/oauth/token",
+		"DISCOURSE_BNET_API_URL":              "http://127.0.0.1:3000",
+	}
+	for k, wantVal := range want {
+		if got := envs[k]; got != wantVal {
+			t.Errorf("%s = %q, want %q", k, got, wantVal)
+		}
+	}
+}
+
 func TestBuildTemplateVars_URL(t *testing.T) {
 	cases := []struct {
 		name    string

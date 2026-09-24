@@ -452,6 +452,15 @@ func sealProvisionedContainer(cmd *cobra.Command, cfg config.Config, name, workd
 		extraHosts = append(extraHosts, proxyExtraHosts(cfg, name, proxyHost)...)
 	}
 
+	// Interpolate ${DISCOURSE_URL} etc. in template env values now that
+	// applyLocalProxyMetadata has resolved the final hostname/port/scheme.
+	tvars := buildTemplateVarsFromEnvs(envs)
+	for k := range templateEnvs {
+		if v, ok := envs[k]; ok {
+			envs[k] = interpolateVars(v, tvars)
+		}
+	}
+
 	if err := docker.RunDetached(name, workdir, snapshotImage, lifecycle.HostPort, lifecycle.ContainerPort, labels, envs, extraHosts, "", templateMounts); err != nil {
 		return withRollback(fmt.Errorf("recreate container without SSH forwarding: %w", err))
 	}
