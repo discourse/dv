@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -66,13 +67,22 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to discover plugin repos: %v\n", err)
 		pluginOutput = ""
 	}
-	var plugins []string
+	var discovered []string
 	for _, line := range strings.Split(strings.TrimSpace(pluginOutput), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			plugins = append(plugins, line)
+			discovered = append(discovered, line)
 		}
 	}
+
+	// A bind-mounted plugin (dv new --plugin-local) is the host's checkout:
+	// resetting it inside the container discards work on the host.
+	mounts, err := docker.GetContainerMounts(name)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to inspect container mounts: %v\n", err)
+		mounts = nil
+	}
+	plugins, mounted := splitMountedPlugins(discovered, workdir, mounts)
 
 	// Confirmation prompt
 	skipConfirm, _ := cmd.Flags().GetBool("yes")
@@ -84,6 +94,7 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 		for _, p := range plugins {
 			fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", p)
 		}
+		printMountedPlugins(cmd, mounted)
 		fmt.Fprintln(cmd.OutOrStdout(), "")
 		yes, err := promptYesNo(cmd.InOrStdin(), cmd.OutOrStdout(), "Continue? (y/N): ")
 		if err != nil {
@@ -93,6 +104,8 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
 			return nil
 		}
+	} else {
+		printMountedPlugins(cmd, mounted)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Catching up in container '%s'...\n", name)
@@ -103,6 +116,35 @@ func catchupRunE(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("container: catchup failed: %w", err)
 	}
 	return nil
+}
+
+// splitMountedPlugins separates discovered plugin repos (relative to workdir,
+// "plugins/<name>") into those catchup may reset and those whose directory is
+// a container mount. A mounted plugin is the host's working copy and is never
+// reset.
+func splitMountedPlugins(plugins []string, workdir string, mounts []docker.Mount) (reset, mounted []string) {
+	destinations := make(map[string]bool, len(mounts))
+	for _, m := range mounts {
+		destinations[path.Clean(m.Container)] = true
+	}
+	for _, p := range plugins {
+		if destinations[path.Clean(path.Join(workdir, p))] {
+			mounted = append(mounted, p)
+		} else {
+			reset = append(reset, p)
+		}
+	}
+	return reset, mounted
+}
+
+func printMountedPlugins(cmd *cobra.Command, mounted []string) {
+	if len(mounted) == 0 {
+		return
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Plugins left alone (bind-mounted from the host):")
+	for _, p := range mounted {
+		fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", p)
+	}
 }
 
 func buildCatchupScript(workdir string, plugins []string) string {
