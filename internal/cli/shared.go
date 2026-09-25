@@ -492,6 +492,12 @@ func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Conf
 		if proxyHost != "" {
 			extraHosts = append(extraHosts, proxyExtraHosts(cfg, name, proxyHost)...)
 		}
+		tvars := buildTemplateVarsFromEnvs(envs)
+		for k := range templateEnvs {
+			if v, ok := envs[k]; ok {
+				envs[k] = interpolateVars(v, tvars)
+			}
+		}
 		if err := docker.RunDetached(name, workdir, imageTag, chosenPort, cfg.ContainerPort, labels, envs, extraHosts, sshAuthSock, templateMounts); err != nil {
 			return result, err
 		}

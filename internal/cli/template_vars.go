@@ -44,6 +44,40 @@ func buildTemplateVars(cfg config.Config, name string) map[string]string {
 	}
 }
 
+// buildTemplateVarsFromEnvs derives the same four reserved variables from an
+// already-populated envs map. Use this in sealProvisionedContainer where the
+// proxy metadata has just been written into envs but no container is running
+// yet to query.
+func buildTemplateVarsFromEnvs(envs map[string]string) map[string]string {
+	scheme := envs["DV_LOCAL_PROXY_SCHEME"]
+	if scheme == "" {
+		scheme = "http"
+	}
+	hostname := envs["DISCOURSE_HOSTNAME"]
+	if hostname == "" {
+		hostname = "localhost"
+	}
+	portStr := envs["DISCOURSE_PORT"]
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 {
+		port = 3000
+	}
+
+	var discourseURL string
+	if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) {
+		discourseURL = fmt.Sprintf("%s://%s", scheme, hostname)
+	} else {
+		discourseURL = fmt.Sprintf("%s://%s:%d", scheme, hostname, port)
+	}
+
+	return map[string]string{
+		"DISCOURSE_HOSTNAME": hostname,
+		"DISCOURSE_PORT":     portStr,
+		"DISCOURSE_SCHEME":   scheme,
+		"DISCOURSE_URL":      discourseURL,
+	}
+}
+
 func resolveDiscourseAccess(cfg config.Config, name string) (scheme, hostname string, port int) {
 	lp := cfg.LocalProxy
 	if lp.Enabled {
