@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"dv/internal/docker"
 )
 
 func TestBuildCatchupScript_CoreOnly(t *testing.T) {
@@ -140,5 +142,42 @@ func TestBuildCatchupScriptWaitsForPostgresBeforeMigrations(t *testing.T) {
 	}
 	if !strings.HasPrefix(script, "set -euo pipefail\n") {
 		t.Fatal("catchup must abort when PostgreSQL readiness times out")
+	}
+}
+
+func TestSplitMountedPlugins_LeavesBindMountedPluginsAlone(t *testing.T) {
+	t.Parallel()
+
+	plugins := []string{"plugins/discourse-ai", "plugins/second-brain"}
+	mounts := []docker.Mount{{Host: "/home/me/work/second-brain", Container: "/var/www/discourse/plugins/second-brain"}}
+
+	reset, mounted := splitMountedPlugins(plugins, "/var/www/discourse", mounts)
+
+	if len(reset) != 1 || reset[0] != "plugins/discourse-ai" {
+		t.Errorf("cloned plugin should be reset: %v", reset)
+	}
+	if len(mounted) != 1 || mounted[0] != "plugins/second-brain" {
+		t.Errorf("bind-mounted plugin must be left alone: %v", mounted)
+	}
+}
+
+func TestSplitMountedPlugins_IgnoresUnrelatedMounts(t *testing.T) {
+	t.Parallel()
+
+	mounts := []docker.Mount{{Host: "/home/me/.ssh", Container: "/home/discourse/.ssh"}}
+	reset, mounted := splitMountedPlugins([]string{"plugins/discourse-ai"}, "/var/www/discourse", mounts)
+
+	if len(reset) != 1 || len(mounted) != 0 {
+		t.Errorf("unrelated mounts must not exclude plugins: reset=%v mounted=%v", reset, mounted)
+	}
+}
+
+func TestSplitMountedPlugins_NoMounts(t *testing.T) {
+	t.Parallel()
+
+	reset, mounted := splitMountedPlugins([]string{"plugins/a", "plugins/b"}, "/var/www/discourse", nil)
+
+	if len(reset) != 2 || len(mounted) != 0 {
+		t.Errorf("without mounts every plugin is reset: reset=%v mounted=%v", reset, mounted)
 	}
 }
