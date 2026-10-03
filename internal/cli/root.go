@@ -163,6 +163,7 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 	rootCmd.AddCommand(restartCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(removeCmd)
+	rootCmd.AddCommand(pruneCmd)
 	rootCmd.AddCommand(exposeCmd)
 	rootCmd.AddCommand(tunnelCmd)
 	rootCmd.AddCommand(mailCmd)
