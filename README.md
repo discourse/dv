@@ -352,6 +352,17 @@ Remove the container and optionally the image.
 dv remove [--image] [--name NAME]
 ```
 
+### dv prune
+Remove dv containers (any image) that are stopped and have not run for longer than `--older-than` (default `14d`; also `2w`, `36h`). Without `--yes` it only lists them.
+
+```bash
+dv prune [--older-than 14d] [--keep NAME ...] [--yes]
+```
+
+- With `--yes`, each candidate is started briefly and its git checkouts (the workdir and each plugin) are checked. A container with uncommitted changes, stashes or commits not on any remote is kept and its changes are listed; `dv extract` the work or `dv remove` it yourself.
+- The selected agent, the default container and `--keep` names are never pruned. Removal goes through `dv remove`, so its hooks run.
+- To prune on a schedule, run `dv prune --yes` from a systemd user timer or cron.
+
 ### Agent management
 Manage multiple containers for the selected image; selection is stored in XDG config. These are the preferred top-level commands; the old `dv agent` group has been removed.
 
