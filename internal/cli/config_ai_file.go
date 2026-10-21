@@ -28,9 +28,10 @@ const (
 )
 
 type aiFileConfig struct {
-	Version      int                    `json:"version"`
-	LLMs         []aiFileLLM            `json:"llms"`
-	SiteSettings map[string]interface{} `json:"site_settings"`
+	Version        int                    `json:"version"`
+	LLMs           []aiFileLLM            `json:"llms"`
+	DecisionModels []aiFileDecisionModel  `json:"decision_models"`
+	SiteSettings   map[string]interface{} `json:"site_settings"`
 }
 
 type aiFileLLM struct {
@@ -239,8 +240,8 @@ func validateAIFileConfig(cfg aiFileConfig) error {
 	if cfg.Version != defaultAIFileVersion {
 		return fmt.Errorf("unsupported AI config version %d", cfg.Version)
 	}
-	if len(cfg.LLMs) == 0 && len(cfg.SiteSettings) == 0 {
-		return errors.New("AI config must contain at least one llm or site_settings entry")
+	if len(cfg.LLMs) == 0 && len(cfg.DecisionModels) == 0 && len(cfg.SiteSettings) == 0 {
+		return errors.New("AI config must contain at least one llm, decision_models, or site_settings entry")
 	}
 
 	seenIDs := map[string]struct{}{}
@@ -284,10 +285,10 @@ func validateAIFileConfig(cfg aiFileConfig) error {
 			seenName[nameKey] = seenLLMMatch{index: i, mode: mode}
 		}
 	}
-	return nil
+	return validateAIFileDecisionModels(cfg.DecisionModels, seenIDs)
 }
 
-func applyAIFileConfig(ctx context.Context, out io.Writer, client aiFileDiscourseClient, cfg aiFileConfig) error {
+func applyAIFileConfig(ctx context.Context, out io.Writer, client aiFileDiscourseClient, cfg aiFileConfig) (retErr error) {
 	modelIDs := map[string]int64{}
 	apiKeys := make([]string, len(cfg.LLMs))
 	apiKeySources := make([]string, len(cfg.LLMs))
@@ -300,7 +301,16 @@ func applyAIFileConfig(ctx context.Context, out io.Writer, client aiFileDiscours
 		apiKeySources[i] = source
 	}
 
-	redactionSecrets := aiFileRedactionSecrets(cfg, apiKeys)
+	decisionKeys := make([]string, len(cfg.DecisionModels))
+	for i, model := range cfg.DecisionModels {
+		key, _, err := resolveAIFileAPIKey(model.credentials(), os.Getenv, onepassword.Read)
+		if err != nil {
+			return fmt.Errorf("decision_models[%d]: resolve credentials: %w", i, redactAIFileSecrets(err, model.APIKey))
+		}
+		decisionKeys[i] = key
+	}
+	redactionSecrets := aiFileRedactionSecrets(cfg, append(apiKeys, decisionKeys...))
+	defer func() { retErr = redactAIFileSecrets(retErr, redactionSecrets...) }()
 
 	if err := applyAIFileSiteSettings(out, client, cfg.SiteSettings, modelIDs, false); err != nil {
 		return redactAIFileSecrets(err, redactionSecrets...)
@@ -387,6 +397,10 @@ func applyAIFileConfig(ctx context.Context, out io.Writer, client aiFileDiscours
 				return fmt.Errorf("fetch Discourse AI state after %s: %w", label, err)
 			}
 		}
+	}
+
+	if err := applyAIFileDecisionModels(ctx, out, client, cfg.DecisionModels, decisionKeys, modelIDs); err != nil {
+		return err
 	}
 
 	if err := applyAIFileSiteSettings(out, client, cfg.SiteSettings, modelIDs, true); err != nil {
@@ -500,6 +514,12 @@ func aiFileRedactionSecrets(cfg aiFileConfig, apiKeys []string) []string {
 	secrets = append(secrets, apiKeys...)
 	for _, llm := range cfg.LLMs {
 		secrets = append(secrets, llm.APIKey)
+	}
+	for _, model := range cfg.DecisionModels {
+		secrets = append(secrets, model.APIKey)
+		for _, header := range model.CustomHeaders {
+			secrets = append(secrets, header.Value)
+		}
 	}
 	for key, value := range cfg.SiteSettings {
 		if aiFileSettingNameLooksSecret(key) {
@@ -723,7 +743,7 @@ func applyAIFileSiteSettings(out io.Writer, client aiFileDiscourseClient, settin
 		if isRef {
 			id, ok := lookupAIFileModelID(modelIDs, ref)
 			if !ok {
-				return fmt.Errorf("site_settings.%s references unknown LLM %q", key, ref)
+				return fmt.Errorf("site_settings.%s references unknown model %q", key, ref)
 			}
 			value = id
 		}

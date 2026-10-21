@@ -48,7 +48,8 @@ With no arguments this command launches an interactive interface to configure AI
 language models for your Discourse instance. You can add, edit, test, and manage
 LLM providers including OpenAI, Anthropic, OpenRouter, and more.
 
-Pass a JSON file (or an alias under ~/.config/dv/ai/) to apply LLM configuration
+Pass a JSON file (or an alias under ~/.config/dv/ai/) to apply LLM and decision
+(classification) model configuration
 non-interactively, for example:
 
   dv config ai ./cdck_qwen.json
@@ -88,7 +89,8 @@ These environment variables are automatically populated in API key fields when
 configuring new models, and are passed to the container when testing connections.
 
 JSON files may also refer to secrets via api_key_ref (op://...), api_key_env, or
-api_key. Secret values are never printed.
+api_key. Add classification models in a decision_models array, separate from llms.
+Secret values are never printed.
 `,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeAIConfigArgs,

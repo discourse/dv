@@ -663,6 +663,55 @@ dv config show
 #### AI Configuration (LLMs)
 Use `dv config ai` to launch a TUI for configuring Discourse AI LLM providers (OpenAI, Anthropic, Bedrock, etc.) and models. It automatically detects API keys from your host environment variables.
 
+JSON templates can configure LLMs and classification models non-interactively:
+
+```bash
+dv config ai cdck_deepseek  # ~/.config/dv/ai/cdck_deepseek.json
+dv config ai ./ai-config.json
+```
+
+Discourse calls classification models **decision models**. Add a `decision_models`
+array alongside `llms` and `site_settings` in a version-1 template, for example:
+
+```json
+{
+  "version": 1,
+  "decision_models": [
+    {
+      "id": "cdck_snorlax_d3",
+      "display_name": "CDCK Snorlax d3",
+      "name": "d3",
+      "provider": "system_one",
+      "url": "https://snorlax1a.dub2.discourse.cloud:13500/v1/systemone",
+      "api_key_ref": "op://vault/item/credential",
+      "ai_secret_name": "CDCK DeepSeek API Key",
+      "vision_enabled": true,
+      "test": true,
+      "upsert": { "match": "name_provider" }
+    }
+  ],
+  "site_settings": { "discourse_ai_enabled": true }
+}
+```
+
+Decision models support `system_one`, `typesafe`, and `open_ai` providers. Use
+`system_one` for System One-compatible servers accepting inline image data URLs;
+Discourse's `typesafe` provider instead sends images as assets. `url` is the full
+inference endpoint, not a base URL. Decision models use the same `api_key_ref`,
+`api_key_env`, `api_key`, `ai_secret_id`, `ai_secret_name`, and `upsert.match`
+options as LLMs. Optional `custom_headers` is an array of `{ "name": "...",
+"value": "..." }` objects (System One and TypeSafe only).
+
+Credentials are stored in Discourse AiSecrets. A supplied key without an explicit
+secret name or ID reuses the matched model's secret, or creates a secret named
+`<display_name> API Key`. Unlike LLM tests, decision-model tests require persisting
+the secret first; a failed test prevents saving the model but does not undo the
+secret change. Omitting credentials allows an unauthenticated endpoint.
+Models are matched by name/provider by default, making repeated applications
+update rather than duplicate them. `site_settings` values can reference a created
+LLM or decision model by `"@id"`. Creating a decision model does not automatically
+assign it to any feature; set the relevant site setting explicitly if needed.
+
 #### AI Tool Workspace
 Use `dv config ai-tool [NAME]` to scaffold a directory under `/home/discourse/ai-tools` for developing custom Discourse AI tools. It includes `tool.yml` (metadata), `script.js` (logic), and `bin/test` / `bin/sync` helpers.
 
