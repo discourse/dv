@@ -374,4 +374,6 @@ ENV UNICORN_PORT=3000
 # to the ember-cli dev server.
 ENV ALLOW_EMBER_CLI_PROXY_BYPASS=1
 
+LABEL devcontainer.metadata='[{"remoteUser": "discourse"}]'
+
 ENTRYPOINT ["/sbin/boot"]
