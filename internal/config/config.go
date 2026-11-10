@@ -701,6 +701,84 @@ func appendMissingDefaultCopyRules(rules []CopyRule, defaults []CopyRule) []Copy
 	return rules
 }
 
+// RemoveAgentFromCopyRules prunes copy rules scoped to a removed agent name.
+// Rules scoped solely to that agent are dropped, rules shared with other agents
+// keep their remaining scopes, and global rules (empty Agents) are untouched.
+// Rule order is preserved.
+func RemoveAgentFromCopyRules(rules []CopyRule, agent string) []CopyRule {
+	agent = strings.TrimSpace(agent)
+	if agent == "" || len(rules) == 0 {
+		return rules
+	}
+	filtered := make([]CopyRule, 0, len(rules))
+	for _, rule := range rules {
+		// Global rules apply to every agent and must survive removal.
+		if len(rule.Agents) == 0 {
+			filtered = append(filtered, rule)
+			continue
+		}
+		kept := make([]string, 0, len(rule.Agents))
+		for _, a := range rule.Agents {
+			if strings.EqualFold(strings.TrimSpace(a), agent) {
+				continue
+			}
+			kept = append(kept, a)
+		}
+		if len(kept) == len(rule.Agents) {
+			filtered = append(filtered, rule)
+			continue
+		}
+		// The rule was scoped only to the removed agent, so it can never match.
+		if len(kept) == 0 {
+			continue
+		}
+		rule.Agents = kept
+		filtered = append(filtered, rule)
+	}
+	return filtered
+}
+
+// HasEquivalentCopyRule reports whether rules already contains a rule with the
+// same host source, container destination, and agent scoping. Comparison trims
+// whitespace and ignores case, matching how copy rules are matched at runtime.
+func HasEquivalentCopyRule(rules []CopyRule, rule CopyRule) bool {
+	host := strings.ToLower(strings.TrimSpace(rule.Host))
+	dst := strings.ToLower(strings.TrimSpace(rule.Container))
+	for _, existing := range rules {
+		if strings.ToLower(strings.TrimSpace(existing.Host)) != host {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(existing.Container)) != dst {
+			continue
+		}
+		if sameCopyRuleAgents(existing.Agents, rule.Agents) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameCopyRuleAgents(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	seen := make(map[string]struct{}, len(a))
+	for _, v := range a {
+		seen[strings.ToLower(strings.TrimSpace(v))] = struct{}{}
+	}
+	for _, v := range b {
+		key := strings.ToLower(strings.TrimSpace(v))
+		if _, ok := seen[key]; !ok {
+			return false
+		}
+		delete(seen, key)
+	}
+	return len(seen) == 0
+}
+
 // EffectiveWorkdir returns the runtime working directory dv commands should use.
 // Priority:
 //  1. Container-specific override set via `dv config workdir`

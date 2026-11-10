@@ -187,6 +187,7 @@ func runRemoveInConfig(cmd *cobra.Command, args []string, force, directOutput bo
 		queueHostnameRemovals(latest, name, proxyAliases...)
 		queueHostnameRemovals(latest, name, proxyHost)
 		delete(latest.HostnameAliases, name)
+		latest.CopyRules = config.RemoveAgentFromCopyRules(latest.CopyRules, name)
 		if latest.SelectedAgent == name {
 			replacementSelected = true
 			latest.SelectedAgent = replacement

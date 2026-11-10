@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1095,5 +1097,248 @@ func TestUpdateCreatesMissingConfigWithoutReentrantLock(t *testing.T) {
 	}
 	if cfg.SelectedAgent != "created-under-lock" {
 		t.Fatalf("selected agent = %q", cfg.SelectedAgent)
+	}
+}
+
+func TestRemoveAgentFromCopyRules(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		agent string
+		rules []CopyRule
+		want  []CopyRule
+	}{
+		{
+			name:  "drops rule scoped only to the removed agent",
+			agent: "agent-one",
+			rules: []CopyRule{
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+				{Host: "~/other", Container: "/c/other", Agents: []string{"agent-two"}},
+			},
+			want: []CopyRule{
+				{Host: "~/other", Container: "/c/other", Agents: []string{"agent-two"}},
+			},
+		},
+		{
+			name:  "keeps global rules with empty agents",
+			agent: "agent-one",
+			rules: []CopyRule{
+				{Host: "~/global", Container: "/c/global"},
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+			},
+			want: []CopyRule{
+				{Host: "~/global", Container: "/c/global"},
+			},
+		},
+		{
+			name:  "trims the agent from rules shared with other agents",
+			agent: "agent-one",
+			rules: []CopyRule{
+				{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-zero", "agent-one", "agent-two"}},
+			},
+			want: []CopyRule{
+				{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-zero", "agent-two"}},
+			},
+		},
+		{
+			name:  "preserves the order of remaining rules",
+			agent: "agent-two",
+			rules: []CopyRule{
+				{Host: "~/a", Container: "/c/a", Agents: []string{"agent-a"}},
+				{Host: "~/b", Container: "/c/b", Agents: []string{"agent-two"}},
+				{Host: "~/c", Container: "/c/c", Agents: []string{"agent-c"}},
+				{Host: "~/d", Container: "/c/d", Agents: []string{"agent-d"}},
+			},
+			want: []CopyRule{
+				{Host: "~/a", Container: "/c/a", Agents: []string{"agent-a"}},
+				{Host: "~/c", Container: "/c/c", Agents: []string{"agent-c"}},
+				{Host: "~/d", Container: "/c/d", Agents: []string{"agent-d"}},
+			},
+		},
+		{
+			name:  "matches trimmed and differently cased agent names",
+			agent: "  Agent-One ",
+			rules: []CopyRule{
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{" agent-one "}},
+				{Host: "~/other", Container: "/c/other", Agents: []string{"agent-two"}},
+			},
+			want: []CopyRule{
+				{Host: "~/other", Container: "/c/other", Agents: []string{"agent-two"}},
+			},
+		},
+		{
+			name:  "blank agent leaves every rule untouched",
+			agent: "   ",
+			rules: []CopyRule{
+				{Host: "~/global", Container: "/c/global"},
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+			},
+			want: []CopyRule{
+				{Host: "~/global", Container: "/c/global"},
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+			},
+		},
+		{
+			name:  "keeps every rule when the agent matches nothing",
+			agent: "missing",
+			rules: []CopyRule{
+				{Host: "~/global", Container: "/c/global"},
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+			},
+			want: []CopyRule{
+				{Host: "~/global", Container: "/c/global"},
+				{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := RemoveAgentFromCopyRules(tt.rules, tt.agent)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("RemoveAgentFromCopyRules() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRemoveAgentFromCopyRules_DoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+
+	rules := []CopyRule{
+		{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-one", "agent-two"}},
+		{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+	}
+	got := RemoveAgentFromCopyRules(rules, "agent-one")
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Agents, []string{"agent-two"}) {
+		t.Fatalf("result = %+v, want one rule scoped to agent-two", got)
+	}
+	if !reflect.DeepEqual(rules[0].Agents, []string{"agent-one", "agent-two"}) {
+		t.Fatalf("input rule agents were mutated: %+v", rules[0].Agents)
+	}
+	if !reflect.DeepEqual(rules[1].Agents, []string{"agent-one"}) {
+		t.Fatalf("input rule agents were mutated: %+v", rules[1].Agents)
+	}
+}
+
+func TestHasEquivalentCopyRule(t *testing.T) {
+	t.Parallel()
+
+	rules := []CopyRule{
+		{Host: "~/global", Container: "/c/global"},
+		{Host: "~/one", Container: "/c/one", Agents: []string{"agent-one"}},
+		{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-one", "agent-two"}},
+	}
+
+	tests := []struct {
+		name string
+		rule CopyRule
+		want bool
+	}{
+		{
+			name: "same host container and agent matches",
+			rule: CopyRule{Host: "~/one", Container: "/c/one", Agents: []string{"agent-one"}},
+			want: true,
+		},
+		{
+			name: "host container and agent compare trimmed and case-insensitively",
+			rule: CopyRule{Host: "  ~/ONE ", Container: " /C/One ", Agents: []string{" Agent-One "}},
+			want: true,
+		},
+		{
+			name: "agent order does not matter",
+			rule: CopyRule{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-two", "agent-one"}},
+			want: true,
+		},
+		{
+			name: "duplicating a global rule with no agents matches",
+			rule: CopyRule{Host: "~/global", Container: "/c/global"},
+			want: true,
+		},
+		{
+			name: "same paths scoped to a different agent does not match",
+			rule: CopyRule{Host: "~/one", Container: "/c/one", Agents: []string{"agent-two"}},
+			want: false,
+		},
+		{
+			name: "template rule for a new agent does not match a global rule",
+			rule: CopyRule{Host: "~/global", Container: "/c/global", Agents: []string{"agent-one"}},
+			want: false,
+		},
+		{
+			name: "extra agent scope does not match",
+			rule: CopyRule{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-one"}},
+			want: false,
+		},
+		{
+			name: "different paths do not match",
+			rule: CopyRule{Host: "~/missing", Container: "/c/missing", Agents: []string{"agent-one"}},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := HasEquivalentCopyRule(rules, tt.rule); got != tt.want {
+				t.Fatalf("HasEquivalentCopyRule(%+v) = %v, want %v", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHasEquivalentCopyRule_TemplateLoopStaysBounded mirrors the `dv new`
+// template copy-rule loop and asserts repeated create/remove cycles cannot grow
+// CopyRules without bound.
+func TestHasEquivalentCopyRule_TemplateLoopStaysBounded(t *testing.T) {
+	t.Parallel()
+
+	template := []CopyRule{
+		{Host: "~/bin/tool.json", Container: "/home/discourse/.config/tool.json"},
+		{Host: "~/bin/token", Container: "/home/discourse/.config/token"},
+	}
+	addTemplateRules := func(rules []CopyRule, agent string) []CopyRule {
+		for _, rule := range template {
+			rule.Agents = []string{agent}
+			if HasEquivalentCopyRule(rules, rule) {
+				continue
+			}
+			rules = append(rules, rule)
+		}
+		return rules
+	}
+
+	var rules []CopyRule
+	rules = addTemplateRules(rules, "agent-one")
+	rules = addTemplateRules(rules, "agent-one")
+	if len(rules) != len(template) {
+		t.Fatalf("rules after re-creating the same agent = %d, want %d: %+v", len(rules), len(template), rules)
+	}
+
+	rules = addTemplateRules(rules, "agent-two")
+	if len(rules) != 2*len(template) {
+		t.Fatalf("rules after adding a second agent = %d, want %d: %+v", len(rules), 2*len(template), rules)
+	}
+
+	// `dv rm` drops only the removed agent's scoped rules.
+	rules = RemoveAgentFromCopyRules(rules, "agent-one")
+	if len(rules) != len(template) {
+		t.Fatalf("rules after removing agent-one = %d, want %d: %+v", len(rules), len(template), rules)
+	}
+	for _, rule := range rules {
+		if len(rule.Agents) != 1 || !strings.EqualFold(rule.Agents[0], "agent-two") {
+			t.Fatalf("leftover rule %+v, want rules scoped to agent-two only", rule)
+		}
+	}
+
+	// Recreating under the removed name re-adds the rules exactly once.
+	rules = addTemplateRules(rules, "agent-one")
+	rules = addTemplateRules(rules, "agent-one")
+	if len(rules) != 2*len(template) {
+		t.Fatalf("rules after recreating agent-one = %d, want %d: %+v", len(rules), 2*len(template), rules)
 	}
 }

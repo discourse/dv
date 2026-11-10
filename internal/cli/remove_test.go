@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -189,6 +190,48 @@ func TestRemoveSkipsHooksWhenContainerDoesNotExist(t *testing.T) {
 	}
 	if _, err := os.Stat(orderPath); !os.IsNotExist(err) {
 		t.Fatalf("hooks should not create order file, stat err = %v", err)
+	}
+}
+
+func TestRemovePrunesCopyRulesScopedToContainer(t *testing.T) {
+	configDir := setupRemoveTestConfig(t, func(cfg *config.Config, _ string) {
+		cfg.CopyRules = []config.CopyRule{
+			{Host: "~/global", Container: "/c/global"},
+			{Host: "~/scoped", Container: "/c/scoped", Agents: []string{"agent-one"}},
+			{Host: "~/shared", Container: "/c/shared", Agents: []string{"agent-one", "other-agent"}},
+			{Host: "~/other", Container: "/c/other", Agents: []string{"other-agent"}},
+		}
+	})
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("DV_AGENT", "")
+	t.Setenv(shellActionDirEnv, t.TempDir())
+
+	restore := stubRemoveDocker(t)
+	defer restore()
+
+	cmd, _, _ := removeTestCommand()
+	if err := removeCmd.RunE(cmd, []string{"agent-one"}); err != nil {
+		t.Fatalf("remove RunE returned error: %v", err)
+	}
+
+	cfg, err := config.LoadOrCreate(configDir)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	want := []config.CopyRule{
+		{Host: "~/global", Container: "/c/global"},
+		{Host: "~/shared", Container: "/c/shared", Agents: []string{"other-agent"}},
+		{Host: "~/other", Container: "/c/other", Agents: []string{"other-agent"}},
+	}
+	if !reflect.DeepEqual(cfg.CopyRules, want) {
+		t.Fatalf("copy rules after removal = %+v, want %+v", cfg.CopyRules, want)
+	}
+	for _, rule := range cfg.CopyRules {
+		for _, agent := range rule.Agents {
+			if agent == "agent-one" {
+				t.Fatalf("rule %+v still scoped to removed container", rule)
+			}
+		}
 	}
 }
 
