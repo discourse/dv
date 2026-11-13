@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -113,6 +114,13 @@ func copyHostToContainer(srcOnHost, dstInContainer, containerName string, verbos
 		return fmt.Errorf("failed to stat source path: %w", err)
 	}
 
+	// docker cp requires an existing parent directory, which the image does not ship.
+	if parent := containerParentDir(dstInContainer); parent != "" {
+		if _, err := docker.ExecOutput(containerName, "/", nil, []string{"bash", "-lc", "mkdir -p " + shellQuote(parent)}); err != nil {
+			return fmt.Errorf("failed to create directory %s in container %s: %w", parent, containerName, err)
+		}
+	}
+
 	// Copy with recursive ownership set to discourse:discourse
 	if err := docker.CopyToContainerWithOwnership(containerName, srcOnHost, dstInContainer, true); err != nil {
 		return fmt.Errorf("failed to copy %s to container %s:%s: %w", srcOnHost, containerName, dstInContainer, err)
@@ -122,6 +130,20 @@ func copyHostToContainer(srcOnHost, dstInContainer, containerName string, verbos
 		fmt.Printf("Copied %s → %s:%s\n", srcOnHost, containerName, dstInContainer)
 	}
 	return nil
+}
+
+// containerParentDir returns the in-container directory that must exist before
+// dst can be copied to, or "" when there is nothing to create. A trailing slash
+// yields the directory itself; root-level and bare relative names have none.
+func containerParentDir(dst string) string {
+	if dst == "" {
+		return ""
+	}
+	parent := path.Dir(dst)
+	if parent == "/" || parent == "." {
+		return ""
+	}
+	return parent
 }
 
 func copyContainerToHost(containerName, srcInContainer, dstOnHost string, verbose bool) error {
