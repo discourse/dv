@@ -258,9 +258,13 @@ var newCmd = &cobra.Command{
 		withoutTestDB, _ := cmd.Flags().GetBool("without-test-db")
 
 		if tpl != nil {
-			// Add copy rules
+			// Add copy rules, skipping ones already recorded for this agent so
+			// recreating a container can't duplicate rules unboundedly.
 			for _, rule := range tpl.Copy {
 				rule.Agents = []string{name}
+				if config.HasEquivalentCopyRule(cfg.CopyRules, rule) {
+					continue
+				}
 				cfg.CopyRules = append(cfg.CopyRules, rule)
 			}
 		}
