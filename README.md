@@ -325,6 +325,8 @@ Push local commits or uncommitted work from the host repository into the running
 dv import [--base main]
 ```
 
+When `frontendWatch` is `false`, `dv import` rebuilds the frontend before it returns (see [Frontend watcher](#frontend-watcher)).
+
 ### dv update agents / agent
 Refresh the preinstalled AI agents inside the container, either all at once or a single named agent.
 
@@ -717,6 +719,21 @@ Use `dv config ai-tool [NAME]` to scaffold a directory under `/home/discourse/ai
 
 #### Default Template
 Use `dv config defaultTemplate [PATH]` to set default template to be used when `dv new` is ran without a `--template` flag. See [templates/full.yaml](./templates/full.yaml) for a complete example of all available features for templates.
+
+#### Frontend watcher
+Each Discourse container runs a rolldown watcher that rebuilds the frontend on every change. It typically uses 3-4 GB of RAM per container. When agents make the changes and you only look at the result, a one-shot build is enough:
+
+```bash
+dv config set frontendWatch false
+```
+
+With `frontendWatch` set to `false`:
+
+- The frontend is built once whenever the `ember` service starts, then the service idles. dv already restarts it after `dv new`, `dv branch`, `dv pr`, `dv catchup`, `dv reset`, `dv plugin` and `dv restart discourse`, so those rebuild automatically.
+- `dv import` rebuilds before it returns.
+- After editing frontend code directly, rebuild with `dv run -- dv-build-frontend`. It blocks until the build finishes and exits non-zero if it fails. A build takes a few seconds, and the site has no frontend assets until it finishes.
+
+The setting applies when dv next starts a container. For a container that is already running, run `dv restart discourse`. Set it back to `true` to restore the watcher. Containers on pre-rolldown Discourse (ember-cli) always keep their watcher.
 
 #### Theme bootstrap
 Use `dv config theme [REPO]` to prepare a theme workspace inside the running container. Running it with no arguments prompts for a name **and** whether you’re building a full theme or component, installs the `discourse_theme` gem, scaffolds a minimal theme under `/home/discourse/<name>`, writes an `AGENTS.md` brief for AI tools, and updates the workdir override so `dv enter` drops you there. Supplying a git URL, `owner/repo` slug, `owner/repo#PR`, or GitHub PR URL clones the existing theme instead of generating a skeleton, while still installing the gem, uploading the theme, writing `AGENTS.md`, and configuring the watcher. Each workspace also receives a `theme-watch-<slug>` runit service that runs `discourse_theme watch` with an API key that’s automatically bound to the first admin user; restart it anytime with `sv restart theme-watch-<slug>` inside the container. Pass `--theme-name` (and optionally `--kind theme|component`) to skip the interactive prompts, and `--verbose` if you want to see every helper command that runs (handy when debugging API key or watcher issues).

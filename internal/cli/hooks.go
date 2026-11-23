@@ -42,6 +42,7 @@ func startContainerWithPostStartHook(cmd *cobra.Command, cfg config.Config, conf
 		return err
 	}
 	syncContainerHostnamesBestEffort(cmd, cfg, name)
+	syncFrontendModeBestEffort(cmd, cfg, name)
 	if commandName == "" && cmd != nil {
 		commandName = cmd.Name()
 	}

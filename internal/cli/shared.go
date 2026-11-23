@@ -515,5 +515,6 @@ func ensureContainerRunningWithWorkdirResult(cmd *cobra.Command, cfg config.Conf
 	} else {
 	}
 	syncContainerHostnamesBestEffort(cmd, cfg, name)
+	syncFrontendModeBestEffort(cmd, cfg, name)
 	return result, nil
 }

@@ -409,7 +409,7 @@ var importCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "🧱 Commits applied: %d\n", len(patchFiles))
 		fmt.Fprintf(cmd.OutOrStdout(), "📄 Working changes copied: %d, deleted: %d\n", len(copies), len(deletes))
 
-		return nil
+		return buildFrontendIfWatchDisabled(cmd, cfg, name, workdir)
 	},
 }
 

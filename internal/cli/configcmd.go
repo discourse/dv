@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -24,7 +25,7 @@ var configGetCmd = &cobra.Command{
 	ValidArgs: []string{
 		"imageTag", "defaultContainerName", "workdir", "customWorkdir",
 		"hostStartingPort", "containerPort", "selectedAgent", "discourseRepo",
-		"extractBranchPrefix", "defaultTemplate", "hooks",
+		"extractBranchPrefix", "defaultTemplate", "hooks", "frontendWatch",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -52,7 +53,7 @@ var configSetCmd = &cobra.Command{
 	ValidArgs: []string{
 		"imageTag", "defaultContainerName", "workdir", "customWorkdir",
 		"hostStartingPort", "containerPort", "selectedAgent", "discourseRepo",
-		"extractBranchPrefix", "defaultTemplate", "hooks",
+		"extractBranchPrefix", "defaultTemplate", "hooks", "frontendWatch",
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configDir, err := xdg.ConfigDir()
@@ -67,7 +68,13 @@ var configSetCmd = &cobra.Command{
 		if err := setConfigField(&cfg, key, value); err != nil {
 			return err
 		}
-		return config.Save(configDir, cfg)
+		if err := config.Save(configDir, cfg); err != nil {
+			return err
+		}
+		if key == "frontendWatch" {
+			fmt.Fprintln(cmd.OutOrStdout(), "Applies when dv next starts a container. For a running container, run 'dv restart discourse'.")
+		}
+		return nil
 	},
 }
 
@@ -195,6 +202,8 @@ func getConfigField(cfg config.Config, key string) (string, error) {
 			return "", err
 		}
 		return string(b), nil
+	case "frontendWatch":
+		return strconv.FormatBool(!frontendWatchDisabled(cfg)), nil
 	default:
 		return "", fmt.Errorf("unknown key: %s", key)
 	}
@@ -238,6 +247,12 @@ func setConfigField(cfg *config.Config, key, val string) error {
 			return fmt.Errorf("invalid hooks JSON: %w", err)
 		}
 		cfg.Hooks = hooks
+	case "frontendWatch":
+		v, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("frontendWatch must be true or false: %w", err)
+		}
+		cfg.FrontendWatch = &v
 	default:
 		return fmt.Errorf("unknown key: %s", key)
 	}

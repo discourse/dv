@@ -250,6 +250,7 @@ var startCmd = &cobra.Command{
 		}
 
 		syncContainerHostnamesBestEffort(cmd, cfg, name)
+		syncFrontendModeBestEffort(cmd, cfg, name)
 
 		hookCtx := hostHookContext{
 			CommandName:   "start",
