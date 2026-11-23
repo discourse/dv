@@ -69,6 +69,11 @@ type Config struct {
 	// Hooks defines host-side lifecycle commands run by dv.
 	Hooks HooksConfig `json:"hooks,omitempty"`
 
+	// FrontendWatch controls the rolldown watcher in Discourse containers. When
+	// false, the frontend is built once per ember service start instead, which
+	// saves several GB of RAM per container. Nil keeps the image default (watch).
+	FrontendWatch *bool `json:"frontendWatch,omitempty"`
+
 	// Agents defines user-provided run-agent shortcuts. Keys are the names used
 	// with `dv run-agent` / `dv ra`.
 	Agents map[string]AgentConfig `json:"agents,omitempty"`

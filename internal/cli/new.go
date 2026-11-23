@@ -491,6 +491,7 @@ func sealProvisionedContainer(cmd *cobra.Command, cfg config.Config, name, workd
 	}
 
 	syncContainerHostnamesBestEffort(cmd, cfg, name)
+	syncFrontendModeBestEffort(cmd, cfg, name)
 	fmt.Fprintln(cmd.OutOrStdout(), "SSH agent forwarding removed.")
 	return nil
 }

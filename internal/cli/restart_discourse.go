@@ -39,6 +39,8 @@ var restartDiscourseCmd = &cobra.Command{
 			if err := startContainerWithPostStartHook(cmd, cfg, configDir, name, "restart discourse"); err != nil {
 				return err
 			}
+		} else {
+			syncFrontendModeBestEffort(cmd, cfg, name)
 		}
 
 		// Determine workdir from the associated image if known; fall back to selected image
