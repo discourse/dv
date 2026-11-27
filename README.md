@@ -183,6 +183,17 @@ Notes for `dv reset git`:
 - Syncs with the upstream branch.
 - Reinstalls dependencies and runs migrations.
 
+### dv catchup
+Bring a container up to date: reset core to its upstream branch, reset and update each plugin that has its own git repository, reinstall dependencies, and migrate both databases.
+
+```bash
+dv catchup [--name NAME] [-y]
+```
+
+Notes:
+- The confirmation lists every repo that will be reset. `-y` skips the prompt.
+- Plugins bind-mounted from the host (`dv new --plugin-local`) are never touched: they are the host's working copy, and a reset inside the container would discard uncommitted work on the host.
+
 ### dv console
 Open an interactive Rails console in a running or stopped Discourse container.
 
